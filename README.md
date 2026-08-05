@@ -20,7 +20,10 @@ remote client
 server.py       HTTP JSON in, streamed SSE out
     |
     v
-engine.py       repeat: model -> choose token -> append -> emit
+engine.py       validate request -> select decoder
+    |
+    v
+decoding/       repeat: model -> choose token -> append -> emit
     |
     v
 model.py        tokens -> Qwen decoder layers -> next-token logits
@@ -50,6 +53,7 @@ Take the model for a spin:
 ```bash
 tinyinfer generate Qwen/Qwen2.5-1.5B-Instruct \
   --prompt "What does a KV cache save?" \
+  --decoding autoregressive \
   --kv-cache contiguous \
   --max-new-tokens 24
 ```
@@ -58,6 +62,7 @@ Start the server:
 
 ```bash
 tinyinfer serve Qwen/Qwen2.5-1.5B-Instruct \
+  --decoding autoregressive \
   --kv-cache contiguous \
   --host 127.0.0.1 \
   --port 8000
@@ -116,10 +121,11 @@ tinyinfer bench Qwen/Qwen2.5-1.5B-Instruct \
   --repetitions 3
 ```
 
-Compare implementations with `--kv-cache none`, `contiguous`, or `paged`. Add
-`--json` for machine-readable results. Reports contain cache allocation, TTFT, inter-token
-latency, end-to-end latency, output tokens per second, percentile summaries,
-and the model/device/dtype/software metadata needed to interpret them.
+Select decoding with `--decoding autoregressive`, and compare cache implementations
+with `--kv-cache none`, `contiguous`, or `paged`. Add `--json` for machine-readable
+results. Reports contain the selected decoding and cache routes, cache allocation,
+TTFT, inter-token latency, end-to-end latency, output tokens per second, percentile
+summaries, and the model/device/dtype/software metadata needed to interpret them.
 
 `none` recomputes the whole sequence for every new token and is the correctness
 baseline. `contiguous` preallocates a request-local cache and is the default.

@@ -54,7 +54,7 @@ class.
    then benchmark them. **Implemented.**
 4. Move eager attention behind `attention/eager.py` and add SDPA as the second
    implementation.
-5. Move the current generation loop behind `decoding/autoregressive.py`.
+5. Move the current generation loop behind `decoding/autoregressive.py`. **Implemented.**
 6. Add sampling alternatives, then continuous request scheduling.
 7. Add ordinary speculative decoding before attempting DSpark.
 8. Replace the educational paged allocator with shared block pools, sequence
@@ -76,7 +76,8 @@ class.
 
 ## Current boundary
 
-KV-cache routing is live in `model.py`, `engine.py`, and the three `kv_cache/`
-implementations. The other packages remain roadmap markers. Move more behavior
-behind a route only when that route has correctness tests and a useful
-comparison implementation.
+KV-cache and decoding selection are live runtime routes. `engine.py` asks the factories
+in `kv_cache/` and `decoding/` for the named implementation; autoregressive decoding is
+the reference route today. The other packages remain roadmap markers. Move more behavior
+behind a route only when that route has correctness tests and a useful comparison
+implementation.

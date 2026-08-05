@@ -17,6 +17,7 @@ HEALTH_PAYLOAD = {
     "device": "mps",
     "dtype": "bfloat16",
     "kv_cache": "contiguous",
+    "decoding": "autoregressive",
     "sampling": {"strategy": "greedy", "temperature": 0.0},
 }
 
@@ -119,6 +120,7 @@ class RecordingClient:
             device="mps",
             dtype="bfloat16",
             kv_cache="contiguous",
+            decoding="autoregressive",
             sampling_strategy="greedy",
             temperature=0.0,
         )
@@ -201,6 +203,7 @@ def test_chat_session_keeps_history_and_clear_resets_it() -> None:
     assert "TINYINFER" in rendered
     assert "Qwen/Qwen2.5-1.5B-Instruct" in rendered
     assert "qwen2 · 28 layers · 32768 context" in rendered
+    assert "autoregressive" in rendered
     assert "greedy (temperature 0) · max output 64" in rendered
     assert "Conversation cleared." in rendered
     assert "3 generated · TTFT 0.50s · 24.0 tok/s" in rendered
@@ -288,9 +291,27 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
         device="mps",
         dtype="bfloat16",
         kv_cache="contiguous",
+        decoding="autoregressive",
         sampling_strategy="greedy",
         temperature=0.0,
     )
+
+
+def test_server_info_keeps_decoding_optional_for_older_callers() -> None:
+    info = ServerInfo(
+        "tinyinfer",
+        "test-model",
+        "qwen2",
+        2,
+        32768,
+        "cpu",
+        "float32",
+        "contiguous",
+        "greedy",
+        0.0,
+    )
+
+    assert info.decoding == "unknown"
 
 
 def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> None:
