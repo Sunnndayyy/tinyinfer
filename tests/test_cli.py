@@ -2,8 +2,8 @@ from argparse import Namespace
 
 import pytest
 
-from tinyinfer import chat, cli
-from tinyinfer.cli import build_parser, run_chat
+from tinyinfer import benchmark, chat, cli
+from tinyinfer.cli import build_parser, run_chat, run_leaderboard
 
 
 def test_chat_command_is_interactive_and_only_needs_a_host() -> None:
@@ -39,6 +39,28 @@ def test_model_commands_accept_each_attention_implementation(attention_name: str
     args = build_parser().parse_args(["bench", "--attention", attention_name])
 
     assert args.attention == attention_name
+
+
+def test_benchmark_can_save_a_named_profile() -> None:
+    args = build_parser().parse_args(
+        ["bench", "--profile", "decode", "--kv-cache", "contiguous", "--save"]
+    )
+
+    assert args.profile == "decode"
+    assert args.save is True
+
+
+def test_leaderboard_command_needs_no_arguments() -> None:
+    args = build_parser().parse_args(["leaderboard"])
+
+    assert args.command == "leaderboard"
+
+
+def test_leaderboard_prints_generated_markdown(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(benchmark, "write_leaderboard", lambda: "# Results\n")
+
+    assert run_leaderboard() == 0
+    assert capsys.readouterr().out == "# Results\n"
 
 
 def test_chat_command_rejects_output_limits_outside_server_bounds(capsys) -> None:

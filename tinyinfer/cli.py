@@ -58,11 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     bench = commands.add_parser("bench", help="benchmark local generation")
     bench.add_argument("model", nargs="?", default=DEFAULT_MODEL)
-    bench.add_argument("--prompt", default="Explain what a KV cache saves in one sentence.")
-    bench.add_argument("--system", default="You are a helpful assistant.")
-    bench.add_argument("--max-new-tokens", type=int, default=16)
-    bench.add_argument("--warmup", type=int, default=1)
-    bench.add_argument("--repetitions", type=int, default=3)
+    bench.add_argument("--profile")
+    bench.add_argument("--prompt")
+    bench.add_argument("--system")
+    bench.add_argument("--max-new-tokens", type=int)
+    bench.add_argument("--warmup", type=int)
+    bench.add_argument("--repetitions", type=int)
     bench.add_argument("--device", choices=("auto", "cpu", "mps"), default="auto")
     bench.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
@@ -71,6 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     bench.add_argument("--cache-dir")
     bench.add_argument("--json", action="store_true", dest="json_output")
+    bench.add_argument("--save", action="store_true")
+
+    commands.add_parser("leaderboard", help="regenerate BENCHMARKS.md from local results")
     return parser
 
 
@@ -145,12 +149,33 @@ def run_chat(args: argparse.Namespace) -> int:
 
 
 def run_bench(args: argparse.Namespace) -> int:
-    from tinyinfer.benchmark import benchmark, format_summary
+    from tinyinfer.benchmark import (
+        benchmark,
+        benchmark_options,
+        format_summary,
+        hardware_name,
+        save_leaderboard_result,
+    )
     from tinyinfer.engine import Engine
     from tinyinfer.tokenizer import Message
 
-    if args.warmup < 0 or args.repetitions < 1 or args.max_new_tokens < 1:
+    try:
+        options = benchmark_options(
+            args.profile,
+            prompt=args.prompt,
+            system=args.system,
+            max_new_tokens=args.max_new_tokens,
+            warmup=args.warmup,
+            repetitions=args.repetitions,
+        )
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
+    if options.warmup < 0 or options.repetitions < 1 or options.max_new_tokens < 1:
         print("warmup must be >= 0; repetitions and max-new-tokens must be >= 1", file=sys.stderr)
+        return 2
+    if args.save and not args.profile:
+        print("--save requires --profile so leaderboard rows stay comparable", file=sys.stderr)
         return 2
     model_dir = resolve_model(args.model, args.cache_dir)
     engine = Engine.from_pretrained(
@@ -161,30 +186,49 @@ def run_bench(args: argparse.Namespace) -> int:
         kv_cache_name=args.kv_cache,
     )
     messages = [
-        Message(role="system", content=args.system),
-        Message(role="user", content=args.prompt),
+        Message(role="system", content=options.system),
+        Message(role="user", content=options.prompt),
     ]
     result = benchmark(
         engine,
         messages,
-        max_new_tokens=args.max_new_tokens,
-        warmup=args.warmup,
-        repetitions=args.repetitions,
+        max_new_tokens=options.max_new_tokens,
+        warmup=options.warmup,
+        repetitions=options.repetitions,
         metadata={
             "model": args.model,
+            "hardware": hardware_name(),
             "device": str(engine.device),
             "dtype": str(next(engine.model.parameters()).dtype),
             "attention": engine.attention_name,
+            "profile": options.profile,
             "kv_cache": engine.kv_cache_name,
-            "max_new_tokens": args.max_new_tokens,
-            "warmup": args.warmup,
-            "repetitions": args.repetitions,
+            "max_new_tokens": options.max_new_tokens,
+            "warmup": options.warmup,
+            "repetitions": options.repetitions,
         },
     )
+    if args.save:
+        try:
+            save_leaderboard_result(result)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 2
     if args.json_output:
         print(json.dumps(result, indent=2))
     else:
         print(format_summary(result))
+    return 0
+
+
+def run_leaderboard() -> int:
+    from tinyinfer.benchmark import write_leaderboard
+
+    try:
+        print(write_leaderboard(), end="")
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
     return 0
 
 
@@ -204,5 +248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_chat(args)
     if args.command == "bench":
         return run_bench(args)
+    if args.command == "leaderboard":
+        return run_leaderboard()
     parser.error(f"unknown command: {args.command}")
     return 2
