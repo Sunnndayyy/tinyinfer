@@ -1,7 +1,9 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
+import torch
 from starlette.testclient import TestClient
 
 from tinyinfer.engine import GenerationResult, TokenEvent
@@ -11,6 +13,14 @@ from tinyinfer.server import MAX_REQUEST_BYTES, ReleasingStreamingResponse, crea
 class RecordingEngine:
     def __init__(self) -> None:
         self.calls = []
+        self.device = torch.device("cpu")
+        self.model = SimpleNamespace(
+            config=SimpleNamespace(
+                num_hidden_layers=2,
+                max_position_embeddings=4096,
+            ),
+            parameters=lambda: iter([torch.zeros(1, dtype=torch.float32)]),
+        )
 
     def stream(self, messages, *, max_new_tokens):
         self.calls.append((messages, max_new_tokens))
@@ -50,6 +60,25 @@ def test_non_streaming_chat_completion_uses_engine_boundary() -> None:
     assert engine.calls[0][1] == 4
 
 
+def test_health_describes_the_loaded_runtime_and_model() -> None:
+    client = TestClient(create_app(RecordingEngine(), "test-model"))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "runtime": "0.1.0",
+        "model": "test-model",
+        "architecture": "qwen2",
+        "layers": 2,
+        "context_length": 4096,
+        "device": "cpu",
+        "dtype": "float32",
+        "sampling": {"strategy": "greedy", "temperature": 0.0},
+    }
+
+
 def test_streaming_chat_completion_uses_sse_and_done_marker() -> None:
     engine = RecordingEngine()
     client = TestClient(create_app(engine, "test-model"))
@@ -68,6 +97,9 @@ def test_streaming_chat_completion_uses_sse_and_done_marker() -> None:
         None,
     ]
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
+    assert chunks[-1]["usage"]["completion_tokens"] == 2
+    assert chunks[-1]["tinyinfer"]["time_to_first_token_seconds"] >= 0
+    assert chunks[-1]["tinyinfer"]["output_tokens_per_second"] >= 0
     assert data_lines[-1] == "[DONE]"
 
 

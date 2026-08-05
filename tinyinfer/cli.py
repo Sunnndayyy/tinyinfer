@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 
 from tinyinfer.artifacts import DEFAULT_MODEL, resolve_model
@@ -49,10 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     chat = commands.add_parser("chat", help="chat with a running TinyInfer server")
     chat.add_argument("--host", default="http://127.0.0.1:8000")
-    chat.add_argument("--prompt", required=True)
     chat.add_argument("--system", default="You are a helpful assistant.")
-    chat.add_argument("--model", default=DEFAULT_MODEL)
-    chat.add_argument("--max-tokens", type=int, default=32)
+    chat.add_argument("--max-tokens", type=int, default=128)
 
     bench = commands.add_parser("bench", help="benchmark local generation")
     bench.add_argument("model", nargs="?", default=DEFAULT_MODEL)
@@ -123,37 +119,17 @@ def run_serve(args: argparse.Namespace) -> int:
 
 
 def run_chat(args: argparse.Namespace) -> int:
-    payload = json.dumps(
-        {
-            "model": args.model,
-            "messages": [
-                {"role": "system", "content": args.system},
-                {"role": "user", "content": args.prompt},
-            ],
-            "max_tokens": args.max_tokens,
-            "stream": True,
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        f"{args.host.rstrip('/')}/v1/chat/completions",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    from tinyinfer.chat import ChatClient, run_chat_session
+
+    if not 1 <= args.max_tokens <= 512:
+        print("max-tokens must be between 1 and 512", file=sys.stderr)
+        return 2
+    return run_chat_session(
+        ChatClient(args.host),
+        system_prompt=args.system,
+        max_tokens=args.max_tokens,
+        output=sys.stdout,
     )
-    try:
-        with urllib.request.urlopen(request) as response:
-            for raw_line in response:
-                line = raw_line.decode("utf-8").strip()
-                if not line.startswith("data: ") or line == "data: [DONE]":
-                    continue
-                chunk = json.loads(line[6:])
-                content = chunk["choices"][0]["delta"].get("content", "")
-                print(content, end="", flush=True)
-    except urllib.error.URLError as error:
-        print(f"could not reach TinyInfer at {args.host}: {error.reason}", file=sys.stderr)
-        return 1
-    print()
-    return 0
 
 
 def run_bench(args: argparse.Namespace) -> int:
