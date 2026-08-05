@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from tinyinfer import __version__
 from tinyinfer.engine import Engine
 from tinyinfer.tokenizer import ALLOWED_ROLES, IM_END, IM_START, Message
 
@@ -94,24 +95,48 @@ def completion_chunk(
     model_name: str,
     content: str | None,
     finish_reason: str | None,
+    usage: dict[str, int] | None = None,
+    timings: dict[str, float] | None = None,
 ) -> dict[str, object]:
     delta: dict[str, str] = {}
     if content is not None:
         delta["content"] = content
-    return {
+    chunk: dict[str, object] = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model_name,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
+    if usage is not None:
+        chunk["usage"] = usage
+    if timings is not None:
+        chunk["tinyinfer"] = timings
+    return chunk
+
+
+def engine_metadata(engine: Engine, model_name: str) -> dict[str, object]:
+    config = engine.model.config
+    dtype = str(next(engine.model.parameters()).dtype).removeprefix("torch.")
+    return {
+        "status": "ok",
+        "runtime": __version__,
+        "model": model_name,
+        "architecture": "qwen2",
+        "layers": config.num_hidden_layers,
+        "context_length": config.max_position_embeddings,
+        "device": str(engine.device),
+        "dtype": dtype,
+        "sampling": {"strategy": "greedy", "temperature": 0.0},
+    }
 
 
 def create_app(engine: Engine, model_name: str) -> Starlette:
     generation_slot = BoundedSemaphore(value=1)
+    metadata = engine_metadata(engine, model_name)
 
     async def health(_: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "model": model_name})
+        return JSONResponse(metadata)
 
     async def chat_completions(request: Request):
         if not generation_slot.acquire(blocking=False):
@@ -157,12 +182,18 @@ def create_app(engine: Engine, model_name: str) -> Starlette:
                 )
 
             def events() -> Iterator[str]:
+                started_at = time.perf_counter()
+                first_token_at: float | None = None
+                generated_tokens = 0
                 while True:
                     try:
                         event = next(token_events)
                     except StopIteration as stopped:
                         finish_reason = stopped.value or "stop"
                         break
+                    generated_tokens += 1
+                    if first_token_at is None:
+                        first_token_at = time.perf_counter()
                     if event.text:
                         chunk = completion_chunk(
                             completion_id=completion_id,
@@ -172,12 +203,20 @@ def create_app(engine: Engine, model_name: str) -> Starlette:
                             finish_reason=None,
                         )
                         yield f"data: {json.dumps(chunk)}\n\n"
+                completed_at = time.perf_counter()
+                time_to_first_token = (first_token_at or completed_at) - started_at
+                output_seconds = max(completed_at - started_at, 1e-9)
                 terminal = completion_chunk(
                     completion_id=completion_id,
                     created=created,
                     model_name=model_name,
                     content=None,
                     finish_reason=finish_reason,
+                    usage={"completion_tokens": generated_tokens},
+                    timings={
+                        "time_to_first_token_seconds": time_to_first_token,
+                        "output_tokens_per_second": generated_tokens / output_seconds,
+                    },
                 )
                 yield f"data: {json.dumps(terminal)}\n\n"
                 yield "data: [DONE]\n\n"

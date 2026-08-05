@@ -58,13 +58,17 @@ tinyinfer serve Qwen/Qwen2.5-1.5B-Instruct \
   --port 8000
 ```
 
-Then use the HTTP client from a second terminal:
+Then open the interactive HTTP client from a second terminal:
 
 ```bash
 tinyinfer chat \
-  --host http://127.0.0.1:8000 \
-  --prompt "Explain prefill and decode in plain language."
+  --host http://127.0.0.1:8000
 ```
+
+The client shows the loaded model and runtime configuration, streams each reply,
+and keeps the full conversation in every later request. Use `/clear` to reset
+the conversation or `/quit` to leave. Override the system message and output
+limit with `--system` and `--max-tokens`.
 
 TinyInfer currently has no authentication or TLS, so protect the port
 with a firewall and do not expose it directly to the internet.
