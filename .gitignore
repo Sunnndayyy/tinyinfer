@@ -8,8 +8,8 @@ dist/
 build/
 *.egg-info/
 .tinyinfer/
+docs/
 */docs/plans/*
 */docs/agents/*
 */docs/agents
-
 
