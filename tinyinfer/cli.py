@@ -6,12 +6,13 @@ import sys
 from collections.abc import Sequence
 
 from tinyinfer.artifacts import DEFAULT_MODEL, resolve_model
+from tinyinfer.client import TinyInferClient
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tinyinfer",
-        description="Run a real, readable LLM inference engine.",
+        description="a tiny llm inference server and chat client",
     )
     commands = parser.add_subparsers(dest="command")
 
@@ -119,13 +120,13 @@ def run_serve(args: argparse.Namespace) -> int:
 
 
 def run_chat(args: argparse.Namespace) -> int:
-    from tinyinfer.chat import ChatClient, run_chat_session
+    from tinyinfer.chat import run_chat_session
 
     if not 1 <= args.max_tokens <= 512:
         print("max-tokens must be between 1 and 512", file=sys.stderr)
         return 2
     return run_chat_session(
-        ChatClient(args.host),
+        TinyInferClient(args.host),
         system_prompt=args.system,
         max_tokens=args.max_tokens,
         output=sys.stdout,
