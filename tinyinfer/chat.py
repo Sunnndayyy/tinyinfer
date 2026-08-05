@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-
 from collections.abc import Callable
 from typing import TextIO
 
@@ -15,6 +14,7 @@ TINYINFER_LOGO = """
 
 
 PLAIN_TINYINFER_LOGO = r"""TINYINFER"""
+
 
 def _supports_color(output: TextIO) -> bool:
     return "NO_COLOR" not in os.environ and hasattr(output, "isatty") and output.isatty()
@@ -116,7 +116,7 @@ def run_chat_session(
         messages = candidate_messages
         output.write(
             "\n\n"
-            f"[{completion.generated_tokens} generated · TTFT {completion.time_to_first_token:.2f}s · "
+            f"[{completion.generated_tokens} generated · TTFT {completion.client_ttft:.2f}s · "
             f"{completion.output_tokens_per_second:.1f} tok/s · {completion.finish_reason}]\n\n"
         )
         output.flush()

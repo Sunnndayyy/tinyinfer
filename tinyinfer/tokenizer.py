@@ -14,10 +14,12 @@ ALLOWED_ROLES = {"system", "user", "assistant"}
 # Currently just supports Qwen / ChatML format
 # TODO: Abstract to common interface and add support for other formats
 
+
 @dataclass(frozen=True)
 class Message:
     role: str
     content: str
+
 
 def format_chatml(messages: Iterable[Message]) -> str:
     """Turn role-labelled messages into the exact text Qwen was trained on."""

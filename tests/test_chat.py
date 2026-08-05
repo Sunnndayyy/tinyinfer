@@ -41,27 +41,66 @@ class HTTPResponse:
             raise self.iteration_error
 
 
+class MutableClock:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+class TimedHTTPResponse(HTTPResponse):
+    def __init__(self, lines, *, clock: MutableClock, advances: list[float]) -> None:
+        super().__init__(lines)
+        self.clock = clock
+        self.advances = advances
+
+    def __iter__(self):
+        for line, seconds in zip(self.lines, self.advances, strict=True):
+            self.clock.advance(seconds)
+            yield line
+
+
 def health_response() -> HTTPResponse:
     return HTTPResponse(body=json.dumps(HEALTH_PAYLOAD).encode("utf-8"))
 
 
-def completion_response(*, text="Hello", finish_reason="stop") -> HTTPResponse:
-    content_chunk = {"choices": [{"delta": {"content": text}, "finish_reason": None}]}
+def completion_response(
+    *,
+    text="Hello",
+    extra_texts=(),
+    finish_reason="stop",
+    server_ttft=0.125,
+    legacy_ttft=0.125,
+) -> HTTPResponse:
     terminal_chunk = {
         "choices": [{"delta": {}, "finish_reason": finish_reason}],
         "usage": {"completion_tokens": 2},
         "tinyinfer": {
-            "time_to_first_token_seconds": 0.125,
             "output_tokens_per_second": 16.0,
         },
     }
-    return HTTPResponse(
+    if server_ttft is not None:
+        terminal_chunk["tinyinfer"]["server_ttft_seconds"] = server_ttft
+    if legacy_ttft is not None:
+        terminal_chunk["tinyinfer"]["time_to_first_token_seconds"] = legacy_ttft
+    content_chunks = []
+    if text is not None:
+        content_chunks = [text, *extra_texts]
+    lines = [
+        f"data: {json.dumps({'choices': [{'delta': {'content': content}, 'finish_reason': None}]})}\n\n".encode()
+        for content in content_chunks
+    ]
+    lines.extend(
         [
-            f"data: {json.dumps(content_chunk)}\n\n".encode(),
             f"data: {json.dumps(terminal_chunk)}\n\n".encode(),
             b"data: [DONE]\n\n",
         ]
     )
+    return HTTPResponse(lines)
 
 
 class RecordingClient:
@@ -90,7 +129,8 @@ class RecordingClient:
             text=reply,
             finish_reason="stop",
             generated_tokens=3,
-            time_to_first_token=0.125,
+            client_ttft=0.5,
+            server_ttft=0.125,
             output_tokens_per_second=24.0,
         )
 
@@ -161,19 +201,15 @@ def test_chat_session_keeps_history_and_clear_resets_it() -> None:
     assert "qwen2 · 28 layers · 32768 context" in rendered
     assert "greedy (temperature 0) · max output 64" in rendered
     assert "Conversation cleared." in rendered
-    assert "3 generated · TTFT 0.12s · 24.0 tok/s" in rendered
+    assert "3 generated · TTFT 0.50s · 24.0 tok/s" in rendered
 
 
 class RejectFirstClient(RecordingClient):
-    def create_chat_completion(
-        self, messages, *, max_tokens, on_text
-    ) -> ChatCompletion:
+    def create_chat_completion(self, messages, *, max_tokens, on_text) -> ChatCompletion:
         if not self.calls:
             self.calls.append((list(messages), max_tokens))
             raise ClientError("prompt exceeds the model context")
-        return super().create_chat_completion(
-            messages, max_tokens=max_tokens, on_text=on_text
-        )
+        return super().create_chat_completion(messages, max_tokens=max_tokens, on_text=on_text)
 
 
 def test_failed_turn_is_not_added_to_conversation_history() -> None:
@@ -194,21 +230,18 @@ def test_failed_turn_is_not_added_to_conversation_history() -> None:
 
 
 class EmptyFirstClient(RecordingClient):
-    def create_chat_completion(
-        self, messages, *, max_tokens, on_text
-    ) -> ChatCompletion:
+    def create_chat_completion(self, messages, *, max_tokens, on_text) -> ChatCompletion:
         if not self.calls:
             self.calls.append((list(messages), max_tokens))
             return ChatCompletion(
                 text="",
                 finish_reason="stop",
                 generated_tokens=0,
-                time_to_first_token=0.0,
+                client_ttft=0.0,
+                server_ttft=0.0,
                 output_tokens_per_second=0.0,
             )
-        return super().create_chat_completion(
-            messages, max_tokens=max_tokens, on_text=on_text
-        )
+        return super().create_chat_completion(messages, max_tokens=max_tokens, on_text=on_text)
 
 
 def test_empty_turn_is_not_added_to_conversation_history() -> None:
@@ -259,12 +292,16 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
 
 def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> None:
     requests = []
+    clock = MutableClock(10.0)
 
     def urlopen(request, *, timeout):
         requests.append(request)
-        return completion_response()
+        clock.advance(0.2)
+        response = completion_response(legacy_ttft=9.0)
+        return TimedHTTPResponse(response.lines, clock=clock, advances=[0.3, 1.0, 0.0])
 
     monkeypatch.setattr("tinyinfer.client.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("tinyinfer.client.time.perf_counter", clock)
     streamed = []
     messages = [
         {"role": "system", "content": "Be concise."},
@@ -291,9 +328,73 @@ def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> N
         text="Hello",
         finish_reason="stop",
         generated_tokens=2,
-        time_to_first_token=0.125,
+        client_ttft=0.5,
+        server_ttft=0.125,
         output_tokens_per_second=16.0,
     )
+    assert completion.time_to_first_token == 0.125
+
+
+def test_chat_client_accepts_legacy_server_ttft_metric(monkeypatch) -> None:
+    clock = iter([30.0, 30.1])
+    monkeypatch.setattr(
+        "tinyinfer.client.urllib.request.urlopen",
+        lambda request, *, timeout: completion_response(
+            server_ttft=None,
+            legacy_ttft=0.25,
+        ),
+    )
+    monkeypatch.setattr("tinyinfer.client.time.perf_counter", lambda: next(clock))
+
+    completion = TinyInferClient("localhost:8000").create_chat_completion(
+        [{"role": "user", "content": "Hello"}],
+        max_tokens=4,
+        on_text=lambda _: None,
+    )
+
+    assert completion.server_ttft == 0.25
+    assert completion.time_to_first_token == 0.25
+
+
+def test_chat_client_times_empty_first_token_without_rendering_it(monkeypatch) -> None:
+    clock = MutableClock(40.0)
+
+    def urlopen(request, *, timeout):
+        clock.advance(0.1)
+        response = completion_response(text="", extra_texts=("Hello",))
+        return TimedHTTPResponse(response.lines, clock=clock, advances=[0.2, 0.4, 0.5, 0.0])
+
+    monkeypatch.setattr("tinyinfer.client.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("tinyinfer.client.time.perf_counter", clock)
+    streamed = []
+
+    completion = TinyInferClient("localhost:8000").create_chat_completion(
+        [{"role": "user", "content": "Hello"}],
+        max_tokens=4,
+        on_text=streamed.append,
+    )
+
+    assert completion.client_ttft == pytest.approx(0.3)
+    assert completion.text == "Hello"
+    assert streamed == ["Hello"]
+
+
+def test_chat_client_uses_terminal_arrival_when_no_text_is_streamed(monkeypatch) -> None:
+    clock = iter([20.0, 20.25])
+    monkeypatch.setattr(
+        "tinyinfer.client.urllib.request.urlopen",
+        lambda request, *, timeout: completion_response(text=None),
+    )
+    monkeypatch.setattr("tinyinfer.client.time.perf_counter", lambda: next(clock))
+
+    completion = TinyInferClient("localhost:8000").create_chat_completion(
+        [{"role": "user", "content": "Stop immediately"}],
+        max_tokens=4,
+        on_text=lambda _: None,
+    )
+
+    assert completion.client_ttft == 0.25
+    assert completion.server_ttft == 0.125
 
 
 @pytest.mark.parametrize(

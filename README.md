@@ -70,6 +70,14 @@ and keeps the full conversation in every later request. Use `/clear` to reset
 the conversation or `/quit` to leave. Override the system message and output
 limit with `--system` and `--max-tokens`.
 
+The displayed TTFT is measured by the client from request dispatch to the first
+streamed token, so it includes network, admission, request parsing, tokenization,
+and prefill. The terminal SSE metadata reports `server_ttft_seconds` separately
+for server-side generation work. It also emits the deprecated
+`time_to_first_token_seconds` alias with the same server-only value for older
+clients; `ChatCompletion.time_to_first_token` remains the matching deprecated
+client accessor.
+
 TinyInfer currently has no authentication or TLS, so protect the port
 with a firewall and do not expose it directly to the internet.
 

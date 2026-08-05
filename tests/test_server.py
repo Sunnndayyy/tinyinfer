@@ -45,6 +45,43 @@ class RejectOnceEngine(RecordingEngine):
         return super().stream(messages, max_new_tokens=max_new_tokens)
 
 
+class EmptyFirstTokenEngine(RecordingEngine):
+    def stream(self, messages, *, max_new_tokens):
+        self.calls.append((messages, max_new_tokens))
+        yield TokenEvent(token_id=10, text="")
+        yield TokenEvent(token_id=11, text="Hello")
+        return "stop"
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+class TimedEagerEngine(RecordingEngine):
+    def __init__(self, clock: MutableClock) -> None:
+        super().__init__()
+        self.clock = clock
+
+    def stream(self, messages, *, max_new_tokens):
+        self.calls.append((messages, max_new_tokens))
+        self.clock.advance(5.0)
+
+        def events():
+            self.clock.advance(2.0)
+            yield TokenEvent(token_id=10, text="Hello")
+            self.clock.advance(3.0)
+            return "stop"
+
+        return events()
+
+
 def test_non_streaming_chat_completion_uses_engine_boundary() -> None:
     engine = RecordingEngine()
     client = TestClient(create_app(engine, "test-model"))
@@ -98,9 +135,46 @@ def test_streaming_chat_completion_uses_sse_and_done_marker() -> None:
     ]
     assert chunks[-1]["choices"][0]["finish_reason"] == "length"
     assert chunks[-1]["usage"]["completion_tokens"] == 2
-    assert chunks[-1]["tinyinfer"]["time_to_first_token_seconds"] >= 0
+    assert chunks[-1]["tinyinfer"]["server_ttft_seconds"] >= 0
+    assert (
+        chunks[-1]["tinyinfer"]["time_to_first_token_seconds"]
+        == chunks[-1]["tinyinfer"]["server_ttft_seconds"]
+    )
     assert chunks[-1]["tinyinfer"]["output_tokens_per_second"] >= 0
     assert data_lines[-1] == "[DONE]"
+
+
+def test_streaming_chat_completion_emits_empty_decoded_token() -> None:
+    client = TestClient(create_app(EmptyFirstTokenEngine(), "test-model"))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "Hi"}], "stream": True},
+    )
+
+    data_lines = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
+    chunks = [json.loads(line) for line in data_lines[:-1]]
+    assert [chunk["choices"][0]["delta"].get("content") for chunk in chunks] == [
+        "",
+        "Hello",
+        None,
+    ]
+
+
+def test_server_ttft_excludes_eager_stream_setup(monkeypatch) -> None:
+    clock = MutableClock()
+    monkeypatch.setattr("tinyinfer.server.time.perf_counter", clock)
+    client = TestClient(create_app(TimedEagerEngine(clock), "test-model"))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "Hi"}], "stream": True},
+    )
+
+    data_lines = [line[6:] for line in response.text.splitlines() if line.startswith("data: ")]
+    terminal = json.loads(data_lines[-2])
+    assert terminal["tinyinfer"]["server_ttft_seconds"] == 2.0
+    assert terminal["tinyinfer"]["time_to_first_token_seconds"] == 2.0
 
 
 def test_invalid_request_is_rejected_before_generation() -> None:

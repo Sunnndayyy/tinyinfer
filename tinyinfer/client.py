@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import http.client
-import json  
+import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -30,8 +31,14 @@ class ChatCompletion:
     text: str
     finish_reason: str
     generated_tokens: int
-    time_to_first_token: float
+    client_ttft: float
+    server_ttft: float
     output_tokens_per_second: float
+
+    @property
+    def time_to_first_token(self) -> float:
+        """Deprecated alias for the server-only TTFT."""
+        return self.server_ttft
 
 
 def _error_message(error: urllib.error.HTTPError) -> str:
@@ -77,9 +84,7 @@ class TinyInferClient:
                 temperature=float(payload["sampling"]["temperature"]),
             )
         except (KeyError, TypeError, ValueError) as error:
-            raise ClientError(
-                "the TinyInfer health response is missing model metadata"
-            ) from error
+            raise ClientError("the TinyInfer health response is missing model metadata") from error
 
     def create_chat_completion(
         self,
@@ -103,6 +108,8 @@ class TinyInferClient:
         )
         text_parts: list[str] = []
         completion: ChatCompletion | None = None
+        request_started_at = time.perf_counter()
+        first_token_at: float | None = None
 
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -116,23 +123,33 @@ class TinyInferClient:
                         delta = choice["delta"]
                         if not isinstance(choice, dict) or not isinstance(delta, dict):
                             raise TypeError("invalid stream choice")
+                        has_content = "content" in delta
                         content = delta.get("content", "")
                         if not isinstance(content, str):
                             raise TypeError("invalid stream content")
                     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
                         raise ClientError("the server sent an invalid chat stream") from error
+                    if has_content and first_token_at is None:
+                        first_token_at = time.perf_counter()
                     if content:
                         text_parts.append(content)
                         on_text(content)
                     if choice.get("finish_reason") is not None:
                         try:
+                            if first_token_at is None:
+                                first_token_at = time.perf_counter()
+                            client_ttft = first_token_at - request_started_at
+                            timings = chunk["tinyinfer"]
+                            if "server_ttft_seconds" in timings:
+                                server_ttft = timings["server_ttft_seconds"]
+                            else:
+                                server_ttft = timings["time_to_first_token_seconds"]
                             completion = ChatCompletion(
                                 text="".join(text_parts),
                                 finish_reason=str(choice["finish_reason"]),
                                 generated_tokens=int(chunk["usage"]["completion_tokens"]),
-                                time_to_first_token=float(
-                                    chunk["tinyinfer"]["time_to_first_token_seconds"]
-                                ),
+                                client_ttft=client_ttft,
+                                server_ttft=float(server_ttft),
                                 output_tokens_per_second=float(
                                     chunk["tinyinfer"]["output_tokens_per_second"]
                                 ),
@@ -153,6 +170,7 @@ class TinyInferClient:
         if completion is None:
             raise ClientError("the server chat stream ended before completion")
         return completion
+
 
 def _optional_int(value: object) -> int | None:
     if value is None:

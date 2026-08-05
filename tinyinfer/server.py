@@ -194,17 +194,18 @@ def create_app(engine: Engine, model_name: str) -> Starlette:
                     generated_tokens += 1
                     if first_token_at is None:
                         first_token_at = time.perf_counter()
-                    if event.text:
-                        chunk = completion_chunk(
-                            completion_id=completion_id,
-                            created=created,
-                            model_name=model_name,
-                            content=event.text,
-                            finish_reason=None,
-                        )
-                        yield f"data: {json.dumps(chunk)}\n\n"
+                    chunk = completion_chunk(
+                        completion_id=completion_id,
+                        created=created,
+                        model_name=model_name,
+                        content=event.text,
+                        finish_reason=None,
+                    )
+                    yield f"data: {json.dumps(chunk)}\n\n"
                 completed_at = time.perf_counter()
-                time_to_first_token = (first_token_at or completed_at) - started_at
+                server_ttft = (
+                    first_token_at if first_token_at is not None else completed_at
+                ) - started_at
                 output_seconds = max(completed_at - started_at, 1e-9)
                 terminal = completion_chunk(
                     completion_id=completion_id,
@@ -214,7 +215,8 @@ def create_app(engine: Engine, model_name: str) -> Starlette:
                     finish_reason=finish_reason,
                     usage={"completion_tokens": generated_tokens},
                     timings={
-                        "time_to_first_token_seconds": time_to_first_token,
+                        "server_ttft_seconds": server_ttft,
+                        "time_to_first_token_seconds": server_ttft,
                         "output_tokens_per_second": generated_tokens / output_seconds,
                     },
                 )
