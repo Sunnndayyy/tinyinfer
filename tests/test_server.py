@@ -14,6 +14,7 @@ class RecordingEngine:
     def __init__(self) -> None:
         self.calls = []
         self.device = torch.device("cpu")
+        self.kv_cache_name = "contiguous"
         self.model = SimpleNamespace(
             config=SimpleNamespace(
                 num_hidden_layers=2,
@@ -112,6 +113,7 @@ def test_health_describes_the_loaded_runtime_and_model() -> None:
         "context_length": 4096,
         "device": "cpu",
         "dtype": "float32",
+        "kv_cache": "contiguous",
         "sampling": {"strategy": "greedy", "temperature": 0.0},
     }
 

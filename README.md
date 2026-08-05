@@ -9,6 +9,9 @@ on Apple Silicon. TinyInfer downloads Qwen's tokenizer and safetensors.
 
 ## overview
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the optimization routes and the order
+in which their reference and experimental implementations should be added.
+
 ```text
 remote client
     |
@@ -47,6 +50,7 @@ Take the model for a spin:
 ```bash
 tinyinfer generate Qwen/Qwen2.5-1.5B-Instruct \
   --prompt "What does a KV cache save?" \
+  --kv-cache contiguous \
   --max-new-tokens 24
 ```
 
@@ -54,6 +58,7 @@ Start the server:
 
 ```bash
 tinyinfer serve Qwen/Qwen2.5-1.5B-Instruct \
+  --kv-cache contiguous \
   --host 127.0.0.1 \
   --port 8000
 ```
@@ -105,24 +110,28 @@ HTTP 503 rather than running concurrent MPS forwards.
 ```bash
 tinyinfer bench Qwen/Qwen2.5-1.5B-Instruct \
   --prompt "What does a KV cache save?" \
+  --kv-cache contiguous \
   --max-new-tokens 16 \
   --warmup 1 \
   --repetitions 3
 ```
 
-Add `--json` for machine-readable results. Reports contain TTFT, inter-token
+Compare implementations with `--kv-cache none`, `contiguous`, or `paged`. Add
+`--json` for machine-readable results. Reports contain cache allocation, TTFT, inter-token
 latency, end-to-end latency, output tokens per second, percentile summaries,
 and the model/device/dtype/software metadata needed to interpret them.
 
-V0 recomputes the whole sequence for every new token. This is intentionally
-inefficient: it is a baseline that a later KV cache must beat.
+`none` recomputes the whole sequence for every new token and is the correctness
+baseline. `contiguous` preallocates a request-local cache and is the default.
+`paged` allocates fixed-size blocks lazily, but currently gathers them before
+eager attention; it teaches paging and is not yet a PagedAttention speedup.
 
 ## Current limitations
 
 - Qwen2 only; V0 is checked against Qwen2.5-1.5B-Instruct.
 - Greedy decoding only.
 - Batch size one and one in-process model.
-- No KV cache; prior tokens are recomputed for every output token.
+- Request-local contiguous and educational paged KV caches; no shared cache pool.
 - Explicit eager attention, not SDPA or FlashAttention.
 - BF16 MPS by default on Apple Silicon; CPU uses float32.
 - No quantization, request queue, auth, Linux/CUDA, or distributed execution.

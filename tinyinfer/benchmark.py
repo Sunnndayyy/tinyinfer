@@ -55,6 +55,7 @@ def run_once(
         "end_to_end_latency_seconds": end_to_end,
         "output_tokens": token_count,
         "output_tokens_per_second": token_count / end_to_end if end_to_end else 0.0,
+        "kv_cache_bytes": engine.last_cache_bytes,
         "text": "".join(output_parts),
     }
 
@@ -76,6 +77,7 @@ def benchmark(
     end_to_end = [run["end_to_end_latency_seconds"] for run in runs]
     throughput = [run["output_tokens_per_second"] for run in runs]
     inter_token = [latency for run in runs for latency in run["inter_token_latency_seconds"]]
+    cache_bytes = [run["kv_cache_bytes"] for run in runs]
     return {
         "metadata": {
             **metadata,
@@ -91,6 +93,7 @@ def benchmark(
                 **distribution(throughput),
                 "mean": statistics.fmean(throughput),
             },
+            "kv_cache_bytes": max(cache_bytes, default=0),
         },
         "runs": runs,
     }
@@ -107,6 +110,7 @@ def format_summary(result: dict[str, Any]) -> str:
         [
             f"model: {metadata['model']}",
             f"device: {metadata['device']} ({metadata['dtype']})",
+            f"KV cache: {metadata['kv_cache']} ({metrics['kv_cache_bytes']} bytes)",
             f"runs: {metadata['repetitions']} after {metadata['warmup']} warmup",
             f"TTFT seconds       p50 {ttft['p50']:.3f} | p95 {ttft['p95']:.3f} | p99 {ttft['p99']:.3f}",
             f"inter-token sec    p50 {itl['p50']:.3f} | p95 {itl['p95']:.3f} | p99 {itl['p99']:.3f}",

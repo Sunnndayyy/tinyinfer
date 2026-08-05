@@ -11,6 +11,8 @@ from safetensors.torch import load_file
 from torch import Tensor, nn
 
 from tinyinfer.artifacts import weight_shards
+from tinyinfer.kv_cache import KVCache
+from tinyinfer.kv_cache.none import NoKVCache
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,11 @@ def rotate_half(values: Tensor) -> Tensor:
 
 
 def rotary_positions(
-    config: QwenConfig, sequence_length: int, device: torch.device
+    config: QwenConfig,
+    sequence_length: int,
+    device: torch.device,
+    *,
+    start: int = 0,
 ) -> tuple[Tensor, Tensor]:
     frequencies = 1.0 / (
         config.rope_theta
@@ -97,7 +103,7 @@ def rotary_positions(
             / config.head_dim
         )
     )
-    positions = torch.arange(sequence_length, device=device, dtype=torch.float32)
+    positions = torch.arange(start, start + sequence_length, device=device, dtype=torch.float32)
     angles = torch.outer(positions, frequencies)
     angles = torch.cat((angles, angles), dim=-1)
     return angles.cos()[None, None, :, :], angles.sin()[None, None, :, :]
@@ -120,6 +126,22 @@ def repeat_kv(hidden_states: Tensor, repeats: int) -> Tensor:
     return expanded.reshape(batch, key_value_heads * repeats, sequence_length, head_dim)
 
 
+def causal_attention_mask(
+    query_length: int,
+    key_length: int,
+    query_start: int,
+    device: torch.device,
+) -> Tensor | None:
+    """Allow each query to see past keys and earlier keys in its own chunk."""
+    if query_length == 1:
+        return None
+    query_positions = torch.arange(
+        query_start, query_start + query_length, device=device
+    ).unsqueeze(1)
+    key_positions = torch.arange(key_length, device=device).unsqueeze(0)
+    return key_positions <= query_positions
+
+
 class Attention(nn.Module):
     def __init__(self, config: QwenConfig):
         super().__init__()
@@ -138,7 +160,15 @@ class Attention(nn.Module):
         )
 
     def forward(
-        self, hidden_states: Tensor, cos: Tensor, sin: Tensor, causal_mask: Tensor
+        self,
+        hidden_states: Tensor,
+        cos: Tensor,
+        sin: Tensor,
+        causal_mask: Tensor | None,
+        *,
+        cache: KVCache,
+        layer_index: int,
+        position: int,
     ) -> Tensor:
         batch, sequence_length, _ = hidden_states.shape
         query = (
@@ -158,11 +188,13 @@ class Attention(nn.Module):
         )
 
         query, key = apply_rotary(query, key, cos, sin)
+        key, value = cache.update(layer_index, position, key, value)
         key = repeat_kv(key, self.config.num_key_value_groups)
         value = repeat_kv(value, self.config.num_key_value_groups)
 
         scores = query @ key.transpose(-2, -1) / math.sqrt(self.config.head_dim)
-        scores = scores.masked_fill(~causal_mask, torch.finfo(scores.dtype).min)
+        if causal_mask is not None:
+            scores = scores.masked_fill(~causal_mask, torch.finfo(scores.dtype).min)
         probabilities = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
         attended = probabilities @ value
         attended = attended.transpose(1, 2).contiguous().view(batch, sequence_length, -1)
@@ -189,10 +221,24 @@ class DecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
     def forward(
-        self, hidden_states: Tensor, cos: Tensor, sin: Tensor, causal_mask: Tensor
+        self,
+        hidden_states: Tensor,
+        cos: Tensor,
+        sin: Tensor,
+        causal_mask: Tensor | None,
+        *,
+        cache: KVCache,
+        layer_index: int,
+        position: int,
     ) -> Tensor:
         hidden_states = hidden_states + self.self_attn(
-            self.input_layernorm(hidden_states), cos, sin, causal_mask
+            self.input_layernorm(hidden_states),
+            cos,
+            sin,
+            causal_mask,
+            cache=cache,
+            layer_index=layer_index,
+            position=position,
         )
         return hidden_states + self.mlp(self.post_attention_layernorm(hidden_states))
 
@@ -205,14 +251,40 @@ class QwenModel(nn.Module):
         self.layers = nn.ModuleList(DecoderLayer(config) for _ in range(config.num_hidden_layers))
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
-    def forward(self, input_ids: Tensor) -> Tensor:
+    def forward(
+        self,
+        input_ids: Tensor,
+        *,
+        cache: KVCache | None = None,
+        position: int = 0,
+    ) -> Tensor:
+        if cache is None:
+            cache = NoKVCache()
         hidden_states = self.embed_tokens(input_ids)
-        cos, sin = rotary_positions(self.config, input_ids.shape[1], input_ids.device)
-        causal_mask = torch.ones(
-            input_ids.shape[1], input_ids.shape[1], device=input_ids.device, dtype=torch.bool
-        ).tril()
-        for layer in self.layers:
-            hidden_states = layer(hidden_states, cos, sin, causal_mask)
+        query_length = input_ids.shape[1]
+        key_length = position + query_length
+        cos, sin = rotary_positions(
+            self.config,
+            query_length,
+            input_ids.device,
+            start=position,
+        )
+        causal_mask = causal_attention_mask(
+            query_length,
+            key_length,
+            position,
+            input_ids.device,
+        )
+        for layer_index, layer in enumerate(self.layers):
+            hidden_states = layer(
+                hidden_states,
+                cos,
+                sin,
+                causal_mask,
+                cache=cache,
+                layer_index=layer_index,
+                position=position,
+            )
         return self.norm(hidden_states)
 
 
@@ -222,13 +294,25 @@ class QwenForCausalLM(nn.Module):
         self.config = config
         self.model = QwenModel(config)
 
-    def forward(self, input_ids: Tensor) -> Tensor:
-        hidden_states = self.model(input_ids)
+    def forward(
+        self,
+        input_ids: Tensor,
+        *,
+        cache: KVCache | None = None,
+        position: int = 0,
+    ) -> Tensor:
+        hidden_states = self.model(input_ids, cache=cache, position=position)
         return F.linear(hidden_states, self.model.embed_tokens.weight)
 
-    def next_token_logits(self, input_ids: Tensor) -> Tensor:
+    def next_token_logits(
+        self,
+        input_ids: Tensor,
+        *,
+        cache: KVCache | None = None,
+        position: int = 0,
+    ) -> Tensor:
         """Project only the final position because generation ignores earlier logits."""
-        final_hidden_state = self.model(input_ids)[:, -1, :]
+        final_hidden_state = self.model(input_ids, cache=cache, position=position)[:, -1, :]
         return F.linear(final_hidden_state, self.model.embed_tokens.weight)
 
     @classmethod

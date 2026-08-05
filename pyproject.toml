@@ -25,8 +25,8 @@ dev = ["pytest>=8", "ruff>=0.9"]
 [project.scripts]
 tinyinfer = "tinyinfer.cli:main"
 
-[tool.setuptools]
-packages = ["tinyinfer"]
+[tool.setuptools.packages.find]
+include = ["tinyinfer*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -7,7 +7,9 @@ from typing import Literal
 
 import torch
 
+from tinyinfer.kv_cache import create_kv_cache
 from tinyinfer.model import QwenForCausalLM
+from tinyinfer.runtime import DEFAULT_KV_CACHE, KV_CACHE_NAMES
 from tinyinfer.tokenizer import Message, QwenTokenizer
 
 
@@ -46,10 +48,26 @@ def resolve_dtype(name: str, device: torch.device) -> torch.dtype:
 
 
 class Engine:
-    def __init__(self, model: QwenForCausalLM, tokenizer: QwenTokenizer, device: torch.device):
+    def __init__(
+        self,
+        model: QwenForCausalLM,
+        tokenizer: QwenTokenizer,
+        device: torch.device,
+        *,
+        kv_cache_name: str = DEFAULT_KV_CACHE,
+        kv_cache_block_size: int = 16,
+    ):
+        if kv_cache_name not in KV_CACHE_NAMES:
+            choices = ", ".join(KV_CACHE_NAMES)
+            raise ValueError(f"unknown KV cache {kv_cache_name!r}; expected one of: {choices}")
+        if kv_cache_block_size < 1:
+            raise ValueError("kv_cache_block_size must be at least 1")
         self.model = model
         self.tokenizer = tokenizer
         self.device = device
+        self.kv_cache_name = kv_cache_name
+        self.kv_cache_block_size = kv_cache_block_size
+        self.last_cache_bytes = 0
 
     @classmethod
     def from_pretrained(
@@ -58,12 +76,18 @@ class Engine:
         *,
         device_name: str = "auto",
         dtype_name: str = "auto",
+        kv_cache_name: str = DEFAULT_KV_CACHE,
     ) -> Engine:
         device = resolve_device(device_name)
         dtype = resolve_dtype(dtype_name, device)
         tokenizer = QwenTokenizer(model_dir)
         model = QwenForCausalLM.from_pretrained(model_dir, device=device, dtype=dtype)
-        return cls(model, tokenizer, device)
+        return cls(
+            model,
+            tokenizer,
+            device,
+            kv_cache_name=kv_cache_name,
+        )
 
     def stream(self, messages: list[Message], *, max_new_tokens: int) -> Iterator[TokenEvent]:
         """Validate eagerly, then return the lazy token iterator."""
@@ -85,10 +109,32 @@ class Engine:
         )
         sequence_length = len(prompt_ids)
         decoder = self.tokenizer.incremental_decoder()
+        cache = create_kv_cache(
+            self.kv_cache_name,
+            num_layers=self.model.config.num_hidden_layers,
+            batch_size=1,
+            num_key_value_heads=self.model.config.num_key_value_heads,
+            head_dim=self.model.config.head_dim,
+            capacity=len(prompt_ids) + max_new_tokens - 1,
+            block_size=self.kv_cache_block_size,
+            device=self.device,
+            dtype=next(self.model.parameters()).dtype,
+        )
+        self.last_cache_bytes = cache.bytes_allocated
 
         with torch.inference_mode():
-            for _ in range(max_new_tokens):
-                logits = self.model.next_token_logits(token_buffer[:, :sequence_length])
+            for step in range(max_new_tokens):
+                position = cache.length(0)
+                if position == 0:
+                    model_input = token_buffer[:, :sequence_length]
+                else:
+                    model_input = token_buffer[:, position:sequence_length]
+                logits = self.model.next_token_logits(
+                    model_input,
+                    cache=cache,
+                    position=position,
+                )
+                self.last_cache_bytes = cache.bytes_allocated
                 next_token = int(torch.argmax(logits[0]).item())
                 if next_token in self.model.config.stop_token_ids:
                     return "stop"
