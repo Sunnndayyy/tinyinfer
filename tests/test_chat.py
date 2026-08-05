@@ -17,6 +17,7 @@ HEALTH_PAYLOAD = {
     "device": "mps",
     "dtype": "bfloat16",
     "kv_cache": "contiguous",
+    "attention": "sdpa",
     "sampling": {"strategy": "greedy", "temperature": 0.0},
 }
 
@@ -69,6 +70,23 @@ def health_response() -> HTTPResponse:
     return HTTPResponse(body=json.dumps(HEALTH_PAYLOAD).encode("utf-8"))
 
 
+def test_server_info_keeps_the_previous_constructor_signature() -> None:
+    info = ServerInfo(
+        "0.1.0",
+        "tiny",
+        "qwen2",
+        2,
+        128,
+        "cpu",
+        "float32",
+        "contiguous",
+        "greedy",
+        0.0,
+    )
+
+    assert info.attention == "unknown"
+
+
 def completion_response(
     *,
     text="Hello",
@@ -119,6 +137,7 @@ class RecordingClient:
             device="mps",
             dtype="bfloat16",
             kv_cache="contiguous",
+            attention="sdpa",
             sampling_strategy="greedy",
             temperature=0.0,
         )
@@ -288,6 +307,7 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
         device="mps",
         dtype="bfloat16",
         kv_cache="contiguous",
+        attention="sdpa",
         sampling_strategy="greedy",
         temperature=0.0,
     )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -11,6 +10,12 @@ from safetensors.torch import load_file
 from torch import Tensor, nn
 
 from tinyinfer.artifacts import weight_shards
+from tinyinfer.attention import (
+    DEFAULT_ATTENTION,
+    AttentionImplementation,
+    AttentionName,
+    create_attention,
+)
 from tinyinfer.kv_cache import KVCache
 from tinyinfer.kv_cache.none import NoKVCache
 
@@ -143,9 +148,10 @@ def causal_attention_mask(
 
 
 class Attention(nn.Module):
-    def __init__(self, config: QwenConfig):
+    def __init__(self, config: QwenConfig, implementation: AttentionImplementation):
         super().__init__()
         self.config = config
+        self.calculate_attention = implementation
         self.q_proj = nn.Linear(
             config.hidden_size, config.num_attention_heads * config.head_dim, bias=True
         )
@@ -192,11 +198,7 @@ class Attention(nn.Module):
         key = repeat_kv(key, self.config.num_key_value_groups)
         value = repeat_kv(value, self.config.num_key_value_groups)
 
-        scores = query @ key.transpose(-2, -1) / math.sqrt(self.config.head_dim)
-        if causal_mask is not None:
-            scores = scores.masked_fill(~causal_mask, torch.finfo(scores.dtype).min)
-        probabilities = F.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
-        attended = probabilities @ value
+        attended = self.calculate_attention(query, key, value, causal_mask)
         attended = attended.transpose(1, 2).contiguous().view(batch, sequence_length, -1)
         return self.o_proj(attended)
 
@@ -213,9 +215,9 @@ class MLP(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, config: QwenConfig):
+    def __init__(self, config: QwenConfig, attention: AttentionImplementation):
         super().__init__()
-        self.self_attn = Attention(config)
+        self.self_attn = Attention(config, attention)
         self.mlp = MLP(config)
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
@@ -244,12 +246,22 @@ class DecoderLayer(nn.Module):
 
 
 class QwenModel(nn.Module):
-    def __init__(self, config: QwenConfig):
+    def __init__(self, config: QwenConfig, *, attention_name: AttentionName = DEFAULT_ATTENTION):
         super().__init__()
         self.config = config
+        self.attention_name = attention_name
+        attention = create_attention(attention_name)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
-        self.layers = nn.ModuleList(DecoderLayer(config) for _ in range(config.num_hidden_layers))
+        self.layers = nn.ModuleList(
+            DecoderLayer(config, attention) for _ in range(config.num_hidden_layers)
+        )
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+
+    def set_attention(self, name: AttentionName) -> None:
+        attention = create_attention(name)
+        for layer in self.layers:
+            layer.self_attn.calculate_attention = attention
+        self.attention_name = name
 
     def forward(
         self,
@@ -289,10 +301,17 @@ class QwenModel(nn.Module):
 
 
 class QwenForCausalLM(nn.Module):
-    def __init__(self, config: QwenConfig):
+    def __init__(self, config: QwenConfig, *, attention_name: AttentionName = DEFAULT_ATTENTION):
         super().__init__()
         self.config = config
-        self.model = QwenModel(config)
+        self.model = QwenModel(config, attention_name=attention_name)
+
+    @property
+    def attention_name(self) -> AttentionName:
+        return self.model.attention_name
+
+    def set_attention(self, name: AttentionName) -> None:
+        self.model.set_attention(name)
 
     def forward(
         self,
@@ -322,10 +341,11 @@ class QwenForCausalLM(nn.Module):
         *,
         device: torch.device,
         dtype: torch.dtype,
+        attention_name: AttentionName = DEFAULT_ATTENTION,
     ) -> QwenForCausalLM:
         config = QwenConfig.from_directory(model_dir)
         with torch.device("meta"):
-            model = cls(config)
+            model = cls(config, attention_name=attention_name)
 
         expected = set(model.state_dict())
         loaded: set[str] = set()

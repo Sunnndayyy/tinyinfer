@@ -24,6 +24,7 @@ class RecordingModel:
     def __init__(self) -> None:
         self.calls = []
         self.cache_dtypes = []
+        self.attention_name = None
         self.weight = torch.nn.Parameter(torch.zeros(1))
         self.config = SimpleNamespace(
             num_hidden_layers=2,
@@ -35,6 +36,9 @@ class RecordingModel:
 
     def parameters(self):
         return iter((self.weight,))
+
+    def set_attention(self, name: str) -> None:
+        self.attention_name = name
 
     def next_token_logits(self, input_ids, *, cache, position):
         self.calls.append((input_ids.shape[1], position, type(cache).__name__))
@@ -80,3 +84,22 @@ def test_engine_uses_the_models_dtype_for_cache_storage() -> None:
     list(engine.stream([Message(role="user", content="hello")], max_new_tokens=1))
 
     assert model.cache_dtypes == [torch.bfloat16]
+
+
+def test_engine_selects_the_models_attention_implementation() -> None:
+    model = RecordingModel()
+
+    engine = Engine(model, Tokenizer(), torch.device("cpu"), attention_name="sdpa")
+
+    assert model.attention_name == "sdpa"
+    assert engine.attention_name == "sdpa"
+
+
+def test_engine_rejects_an_unknown_attention_implementation() -> None:
+    with pytest.raises(ValueError, match="unknown attention 'flash'; expected one of: eager, sdpa"):
+        Engine(
+            RecordingModel(),
+            Tokenizer(),
+            torch.device("cpu"),
+            attention_name="flash",
+        )

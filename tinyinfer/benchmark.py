@@ -110,6 +110,7 @@ def format_summary(result: dict[str, Any]) -> str:
         [
             f"model: {metadata['model']}",
             f"device: {metadata['device']} ({metadata['dtype']})",
+            f"attention: {metadata.get('attention', 'unknown')}",
             f"KV cache: {metadata['kv_cache']} ({metrics['kv_cache_bytes']} bytes)",
             f"runs: {metadata['repetitions']} after {metadata['warmup']} warmup",
             f"TTFT seconds       p50 {ttft['p50']:.3f} | p95 {ttft['p95']:.3f} | p99 {ttft['p99']:.3f}",
