@@ -127,6 +127,7 @@ def engine_metadata(engine: Engine, model_name: str) -> dict[str, object]:
         "context_length": config.max_position_embeddings,
         "device": str(engine.device),
         "dtype": dtype,
+        "kv_cache": engine.kv_cache_name,
         "sampling": {"strategy": "greedy", "temperature": 0.0},
     }
 

@@ -4,7 +4,8 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tinyinfer.model import QwenConfig, QwenForCausalLM, repeat_kv
+from tinyinfer.kv_cache import create_kv_cache
+from tinyinfer.model import QwenConfig, QwenForCausalLM, causal_attention_mask, repeat_kv
 
 
 def tiny_config() -> QwenConfig:
@@ -30,6 +31,12 @@ def test_repeat_kv_expands_grouped_query_heads() -> None:
 
     assert repeated.shape == (1, 4, 1, 1)
     assert repeated[:, :, 0, 0].tolist() == [[1.0, 1.0, 2.0, 2.0]]
+
+
+def test_single_token_decode_does_not_need_a_causal_mask() -> None:
+    mask = causal_attention_mask(1, 5, 4, torch.device("cpu"))
+
+    assert mask is None
 
 
 def test_qwen_forward_returns_one_logit_vector_per_token() -> None:
@@ -64,6 +71,36 @@ def test_different_prefixes_change_the_final_token_prediction() -> None:
         second = model(torch.tensor([[1, 6, 9]]))[:, -1]
 
     assert not torch.allclose(first, second)
+
+
+@pytest.mark.parametrize("cache_name", ["contiguous", "paged"])
+def test_incremental_kv_cache_matches_full_prefix_logits(cache_name: str) -> None:
+    torch.manual_seed(13)
+    model = QwenForCausalLM(tiny_config()).eval()
+    prompt = torch.tensor([[1, 5, 7, 9]])
+    cache = create_kv_cache(
+        cache_name,
+        num_layers=model.config.num_hidden_layers,
+        batch_size=1,
+        num_key_value_heads=model.config.num_key_value_heads,
+        head_dim=model.config.head_dim,
+        capacity=8,
+        block_size=2,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.inference_mode():
+        prefill_logits = model.next_token_logits(prompt, cache=cache, position=0)
+        next_token = torch.argmax(prefill_logits, dim=-1, keepdim=True)
+        cached_logits = model.next_token_logits(
+            next_token,
+            cache=cache,
+            position=prompt.shape[1],
+        )
+        full_prefix_logits = model.next_token_logits(torch.cat((prompt, next_token), dim=1))
+
+    torch.testing.assert_close(cached_logits, full_prefix_logits, rtol=1e-5, atol=1e-5)
 
 
 def write_tiny_checkpoint(model, directory, *, omit_key: str | None = None) -> None:

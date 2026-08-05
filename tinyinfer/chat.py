@@ -44,6 +44,7 @@ def render_banner(info: ServerInfo, *, host: str, max_tokens: int, output: TextI
             f"  runtime    v{info.runtime} · {info.device} · {info.dtype}",
             f"  model      {info.model}",
             f"  arch       {architecture}",
+            f"  kv cache   {info.kv_cache}",
             (
                 f"  sampling   {info.sampling_strategy} "
                 f"(temperature {info.temperature:g}) · max output {max_tokens}"

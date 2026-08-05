@@ -16,6 +16,7 @@ HEALTH_PAYLOAD = {
     "context_length": 32_768,
     "device": "mps",
     "dtype": "bfloat16",
+    "kv_cache": "contiguous",
     "sampling": {"strategy": "greedy", "temperature": 0.0},
 }
 
@@ -117,6 +118,7 @@ class RecordingClient:
             context_length=32_768,
             device="mps",
             dtype="bfloat16",
+            kv_cache="contiguous",
             sampling_strategy="greedy",
             temperature=0.0,
         )
@@ -285,6 +287,7 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
         context_length=32_768,
         device="mps",
         dtype="bfloat16",
+        kv_cache="contiguous",
         sampling_strategy="greedy",
         temperature=0.0,
     )

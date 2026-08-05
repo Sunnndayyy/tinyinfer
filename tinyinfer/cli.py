@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 from tinyinfer.artifacts import DEFAULT_MODEL, resolve_model
 from tinyinfer.client import TinyInferClient
+from tinyinfer.runtime import DEFAULT_KV_CACHE, KV_CACHE_NAMES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
     )
+    generate.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     generate.add_argument("--cache-dir")
 
     serve = commands.add_parser("serve", help="serve the real model over HTTP")
@@ -39,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
     )
+    serve.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     serve.add_argument("--cache-dir")
     serve.add_argument(
         "--allow-remote",
@@ -62,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
     )
+    bench.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     bench.add_argument("--cache-dir")
     bench.add_argument("--json", action="store_true", dest="json_output")
     return parser
@@ -81,6 +85,7 @@ def run_generate(args: argparse.Namespace) -> int:
         model_dir,
         device_name=args.device,
         dtype_name=args.dtype,
+        kv_cache_name=args.kv_cache,
     )
     messages = [
         Message(role="system", content=args.system),
@@ -113,6 +118,7 @@ def run_serve(args: argparse.Namespace) -> int:
         model_dir,
         device_name=args.device,
         dtype_name=args.dtype,
+        kv_cache_name=args.kv_cache,
     )
     app = create_app(engine, args.model)
     uvicorn.run(app, host=args.host, port=args.port)
@@ -146,6 +152,7 @@ def run_bench(args: argparse.Namespace) -> int:
         model_dir,
         device_name=args.device,
         dtype_name=args.dtype,
+        kv_cache_name=args.kv_cache,
     )
     messages = [
         Message(role="system", content=args.system),
@@ -161,6 +168,7 @@ def run_bench(args: argparse.Namespace) -> int:
             "model": args.model,
             "device": str(engine.device),
             "dtype": str(next(engine.model.parameters()).dtype),
+            "kv_cache": engine.kv_cache_name,
             "max_new_tokens": args.max_new_tokens,
             "warmup": args.warmup,
             "repetitions": args.repetitions,
