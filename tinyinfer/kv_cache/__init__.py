@@ -1,4 +1,4 @@
-"""Small, explicit KV-cache implementations used by TinyInfer."""
+"""Small, explicit KV-cache implementations."""
 
 from __future__ import annotations
 

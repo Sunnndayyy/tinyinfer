@@ -1,12 +1,6 @@
-"""An educational block-based KV cache inspired by PagedAttention.
-
-This is a teaching implementation of the block-allocation idea in
+"""This is an implementation of the block-allocation idea in
 https://arxiv.org/abs/2309.06180 ("Efficient Memory Management for Large
 Language Model Serving with PagedAttention").
-
-This implements lazy fixed-size KV pages. TinyInfer's eager attention still
-materializes them as one contiguous tensor, so this teaches page allocation but
-is not yet the paper's page-aware attention kernel or shared multi-request pool.
 
 TODO for full PagedAttention:
 - allocate physical K/V blocks from a pool shared by concurrent requests;
