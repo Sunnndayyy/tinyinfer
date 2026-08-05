@@ -10,6 +10,6 @@ build/
 .tinyinfer/
 docs/
 */docs/plans/*
-*/docs/agents/*
+docs/agents/*
 */docs/agents
 
