@@ -24,6 +24,7 @@ def test_model_commands_default_to_contiguous_kv_cache(command: str) -> None:
     args = build_parser().parse_args(arguments)
 
     assert args.kv_cache == "contiguous"
+    assert args.attention == "eager"
 
 
 @pytest.mark.parametrize("cache_name", ["none", "contiguous", "paged"])
@@ -31,6 +32,13 @@ def test_model_commands_accept_each_kv_cache(cache_name: str) -> None:
     args = build_parser().parse_args(["bench", "--kv-cache", cache_name])
 
     assert args.kv_cache == cache_name
+
+
+@pytest.mark.parametrize("attention_name", ["eager", "sdpa"])
+def test_model_commands_accept_each_attention_implementation(attention_name: str) -> None:
+    args = build_parser().parse_args(["bench", "--attention", attention_name])
+
+    assert args.attention == attention_name
 
 
 def test_benchmark_can_save_a_named_profile() -> None:

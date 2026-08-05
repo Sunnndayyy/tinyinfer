@@ -25,6 +25,7 @@ class ServerInfo:
     kv_cache: str
     sampling_strategy: str
     temperature: float
+    attention: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class TinyInferClient:
                 context_length=_optional_int(payload.get("context_length")),
                 device=str(payload.get("device", "unknown")),
                 dtype=str(payload.get("dtype", "unknown")),
+                attention=str(payload.get("attention", "unknown")),
                 kv_cache=str(payload.get("kv_cache", "unknown")),
                 sampling_strategy=str(payload["sampling"]["strategy"]),
                 temperature=float(payload["sampling"]["temperature"]),

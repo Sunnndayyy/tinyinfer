@@ -39,8 +39,9 @@ def test_single_token_decode_does_not_need_a_causal_mask() -> None:
     assert mask is None
 
 
-def test_qwen_forward_returns_one_logit_vector_per_token() -> None:
-    model = QwenForCausalLM(tiny_config())
+@pytest.mark.parametrize("attention_name", ["eager", "sdpa"])
+def test_qwen_forward_returns_one_logit_vector_per_token(attention_name: str) -> None:
+    model = QwenForCausalLM(tiny_config(), attention_name=attention_name)
     input_ids = torch.tensor([[1, 5, 7, 9]])
 
     logits = model(input_ids)
@@ -49,9 +50,10 @@ def test_qwen_forward_returns_one_logit_vector_per_token() -> None:
     assert torch.isfinite(logits).all()
 
 
-def test_future_tokens_do_not_change_earlier_logits() -> None:
+@pytest.mark.parametrize("attention_name", ["eager", "sdpa"])
+def test_future_tokens_do_not_change_earlier_logits(attention_name: str) -> None:
     torch.manual_seed(7)
-    model = QwenForCausalLM(tiny_config()).eval()
+    model = QwenForCausalLM(tiny_config(), attention_name=attention_name).eval()
     prefix = torch.tensor([[1, 5, 7]])
     longer = torch.tensor([[1, 5, 7, 11]])
 
@@ -73,10 +75,14 @@ def test_different_prefixes_change_the_final_token_prediction() -> None:
     assert not torch.allclose(first, second)
 
 
+@pytest.mark.parametrize("attention_name", ["eager", "sdpa"])
 @pytest.mark.parametrize("cache_name", ["contiguous", "paged"])
-def test_incremental_kv_cache_matches_full_prefix_logits(cache_name: str) -> None:
+def test_incremental_kv_cache_matches_full_prefix_logits(
+    cache_name: str,
+    attention_name: str,
+) -> None:
     torch.manual_seed(13)
-    model = QwenForCausalLM(tiny_config()).eval()
+    model = QwenForCausalLM(tiny_config(), attention_name=attention_name).eval()
     prompt = torch.tensor([[1, 5, 7, 9]])
     cache = create_kv_cache(
         cache_name,
@@ -101,6 +107,35 @@ def test_incremental_kv_cache_matches_full_prefix_logits(cache_name: str) -> Non
         full_prefix_logits = model.next_token_logits(torch.cat((prompt, next_token), dim=1))
 
     torch.testing.assert_close(cached_logits, full_prefix_logits, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("attention_name", ["eager", "sdpa"])
+@pytest.mark.parametrize("cache_name", ["contiguous", "paged"])
+def test_chunked_prefill_matches_full_prefix_logits(
+    cache_name: str,
+    attention_name: str,
+) -> None:
+    torch.manual_seed(17)
+    model = QwenForCausalLM(tiny_config(), attention_name=attention_name).eval()
+    prompt = torch.tensor([[1, 5, 7, 9]])
+    cache = create_kv_cache(
+        cache_name,
+        num_layers=model.config.num_hidden_layers,
+        batch_size=1,
+        num_key_value_heads=model.config.num_key_value_heads,
+        head_dim=model.config.head_dim,
+        capacity=8,
+        block_size=2,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.inference_mode():
+        model.next_token_logits(prompt[:, :2], cache=cache, position=0)
+        chunked_logits = model.next_token_logits(prompt[:, 2:], cache=cache, position=2)
+        full_prefix_logits = model.next_token_logits(prompt)
+
+    torch.testing.assert_close(chunked_logits, full_prefix_logits, rtol=1e-5, atol=1e-5)
 
 
 def write_tiny_checkpoint(model, directory, *, omit_key: str | None = None) -> None:

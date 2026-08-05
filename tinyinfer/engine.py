@@ -7,9 +7,10 @@ from typing import Literal
 
 import torch
 
+from tinyinfer.attention import AttentionName, validate_attention_name
 from tinyinfer.kv_cache import create_kv_cache
 from tinyinfer.model import QwenForCausalLM
-from tinyinfer.runtime import DEFAULT_KV_CACHE, KV_CACHE_NAMES
+from tinyinfer.runtime import DEFAULT_ATTENTION, DEFAULT_KV_CACHE, KV_CACHE_NAMES
 from tinyinfer.tokenizer import Message, QwenTokenizer
 
 
@@ -54,20 +55,28 @@ class Engine:
         tokenizer: QwenTokenizer,
         device: torch.device,
         *,
+        attention_name: str = DEFAULT_ATTENTION,
         kv_cache_name: str = DEFAULT_KV_CACHE,
         kv_cache_block_size: int = 16,
     ):
+        selected_attention = validate_attention_name(attention_name)
         if kv_cache_name not in KV_CACHE_NAMES:
             choices = ", ".join(KV_CACHE_NAMES)
             raise ValueError(f"unknown KV cache {kv_cache_name!r}; expected one of: {choices}")
         if kv_cache_block_size < 1:
             raise ValueError("kv_cache_block_size must be at least 1")
         self.model = model
+        if self.model.attention_name != selected_attention:
+            self.model.set_attention(selected_attention)
         self.tokenizer = tokenizer
         self.device = device
         self.kv_cache_name = kv_cache_name
         self.kv_cache_block_size = kv_cache_block_size
         self.last_cache_bytes = 0
+
+    @property
+    def attention_name(self) -> AttentionName:
+        return self.model.attention_name
 
     @classmethod
     def from_pretrained(
@@ -76,16 +85,23 @@ class Engine:
         *,
         device_name: str = "auto",
         dtype_name: str = "auto",
+        attention_name: str = DEFAULT_ATTENTION,
         kv_cache_name: str = DEFAULT_KV_CACHE,
     ) -> Engine:
         device = resolve_device(device_name)
         dtype = resolve_dtype(dtype_name, device)
         tokenizer = QwenTokenizer(model_dir)
-        model = QwenForCausalLM.from_pretrained(model_dir, device=device, dtype=dtype)
+        model = QwenForCausalLM.from_pretrained(
+            model_dir,
+            device=device,
+            dtype=dtype,
+            attention_name=attention_name,
+        )
         return cls(
             model,
             tokenizer,
             device,
+            attention_name=attention_name,
             kv_cache_name=kv_cache_name,
         )
 
