@@ -1,6 +1,6 @@
 from argparse import Namespace
 
-from tinyinfer import chat
+from tinyinfer import chat, cli
 from tinyinfer.cli import build_parser, run_chat
 
 
@@ -30,7 +30,11 @@ def test_chat_command_rejects_output_limits_outside_server_bounds(capsys) -> Non
 def test_chat_command_starts_interactive_session(monkeypatch) -> None:
     calls = []
     client = object()
-    monkeypatch.setattr(chat, "ChatClient", lambda host: calls.append(("host", host)) or client)
+    monkeypatch.setattr(
+        cli,
+        "TinyInferClient",
+        lambda host: calls.append(("host", host)) or client,
+    )
 
     def fake_session(received_client, **options):
         calls.append(("session", received_client, options))

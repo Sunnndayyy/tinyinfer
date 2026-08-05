@@ -4,14 +4,8 @@ import urllib.error
 
 import pytest
 
-from tinyinfer.chat import (
-    ChatClient,
-    ChatClientError,
-    ChatTurn,
-    ServerInfo,
-    render_banner,
-    run_chat_session,
-)
+from tinyinfer.chat import render_banner, run_chat_session
+from tinyinfer.client import ChatCompletion, ClientError, ServerInfo, TinyInferClient
 
 HEALTH_PAYLOAD = {
     "status": "ok",
@@ -75,7 +69,7 @@ class RecordingClient:
         self.calls = []
         self.host = "http://localhost:8000"
 
-    def server_info(self) -> ServerInfo:
+    def get_server_info(self) -> ServerInfo:
         return ServerInfo(
             runtime="0.1.0",
             model="Qwen/Qwen2.5-1.5B-Instruct",
@@ -88,11 +82,11 @@ class RecordingClient:
             temperature=0.0,
         )
 
-    def complete(self, messages, *, max_tokens, on_text) -> ChatTurn:
+    def create_chat_completion(self, messages, *, max_tokens, on_text) -> ChatCompletion:
         self.calls.append((list(messages), max_tokens))
         reply = f"reply {len(self.calls)}"
         on_text(reply)
-        return ChatTurn(
+        return ChatCompletion(
             text=reply,
             finish_reason="stop",
             generated_tokens=3,
@@ -117,7 +111,7 @@ def test_banner_renders_shaded_logo_in_color_terminals(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
 
     banner = render_banner(
-        client.server_info(),
+        client.get_server_info(),
         host=client.host,
         max_tokens=128,
         output=output,
@@ -133,13 +127,13 @@ def test_banner_uses_plain_logo_when_color_is_disabled(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
 
     banner = render_banner(
-        client.server_info(),
+        client.get_server_info(),
         host=client.host,
         max_tokens=128,
         output=output,
     )
 
-    assert banner.startswith("TINYINFER\n########")
+    assert banner.startswith("TINYINFER\n")
     assert "\033[" not in banner
 
 
@@ -171,11 +165,15 @@ def test_chat_session_keeps_history_and_clear_resets_it() -> None:
 
 
 class RejectFirstClient(RecordingClient):
-    def complete(self, messages, *, max_tokens, on_text) -> ChatTurn:
+    def create_chat_completion(
+        self, messages, *, max_tokens, on_text
+    ) -> ChatCompletion:
         if not self.calls:
             self.calls.append((list(messages), max_tokens))
-            raise ChatClientError("prompt exceeds the model context")
-        return super().complete(messages, max_tokens=max_tokens, on_text=on_text)
+            raise ClientError("prompt exceeds the model context")
+        return super().create_chat_completion(
+            messages, max_tokens=max_tokens, on_text=on_text
+        )
 
 
 def test_failed_turn_is_not_added_to_conversation_history() -> None:
@@ -196,17 +194,21 @@ def test_failed_turn_is_not_added_to_conversation_history() -> None:
 
 
 class EmptyFirstClient(RecordingClient):
-    def complete(self, messages, *, max_tokens, on_text) -> ChatTurn:
+    def create_chat_completion(
+        self, messages, *, max_tokens, on_text
+    ) -> ChatCompletion:
         if not self.calls:
             self.calls.append((list(messages), max_tokens))
-            return ChatTurn(
+            return ChatCompletion(
                 text="",
                 finish_reason="stop",
                 generated_tokens=0,
                 time_to_first_token=0.0,
                 output_tokens_per_second=0.0,
             )
-        return super().complete(messages, max_tokens=max_tokens, on_text=on_text)
+        return super().create_chat_completion(
+            messages, max_tokens=max_tokens, on_text=on_text
+        )
 
 
 def test_empty_turn_is_not_added_to_conversation_history() -> None:
@@ -232,13 +234,13 @@ def test_empty_turn_is_not_added_to_conversation_history() -> None:
 def test_chat_client_reads_health_metadata(monkeypatch) -> None:
     requests = []
 
-    def urlopen(request):
+    def urlopen(request, *, timeout):
         requests.append(request)
         return health_response()
 
-    monkeypatch.setattr("tinyinfer.chat.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("tinyinfer.client.urllib.request.urlopen", urlopen)
 
-    info = ChatClient("localhost:8000/").server_info()
+    info = TinyInferClient("localhost:8000/").get_server_info()
 
     assert requests[0].full_url == "http://localhost:8000/health"
     assert requests[0].get_method() == "GET"
@@ -258,18 +260,18 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
 def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> None:
     requests = []
 
-    def urlopen(request):
+    def urlopen(request, *, timeout):
         requests.append(request)
         return completion_response()
 
-    monkeypatch.setattr("tinyinfer.chat.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("tinyinfer.client.urllib.request.urlopen", urlopen)
     streamed = []
     messages = [
         {"role": "system", "content": "Be concise."},
         {"role": "user", "content": "Hello"},
     ]
 
-    turn = ChatClient("http://localhost:8000").complete(
+    completion = TinyInferClient("http://localhost:8000").create_chat_completion(
         messages,
         max_tokens=24,
         on_text=streamed.append,
@@ -285,7 +287,7 @@ def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> N
         "stream": True,
     }
     assert streamed == ["Hello"]
-    assert turn == ChatTurn(
+    assert completion == ChatCompletion(
         text="Hello",
         finish_reason="stop",
         generated_tokens=2,
@@ -305,10 +307,13 @@ def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> N
     ],
 )
 def test_chat_client_rejects_incomplete_streams(monkeypatch, response, message) -> None:
-    monkeypatch.setattr("tinyinfer.chat.urllib.request.urlopen", lambda request: response)
+    monkeypatch.setattr(
+        "tinyinfer.client.urllib.request.urlopen",
+        lambda request, *, timeout: response,
+    )
 
-    with pytest.raises(ChatClientError, match=message):
-        ChatClient("localhost:8000").complete(
+    with pytest.raises(ClientError, match=message):
+        TinyInferClient("localhost:8000").create_chat_completion(
             [{"role": "user", "content": "Hello"}],
             max_tokens=4,
             on_text=lambda _: None,
@@ -324,12 +329,12 @@ def test_chat_client_translates_http_errors(monkeypatch) -> None:
         io.BytesIO(b'{"error":{"message":"model is busy"}}'),
     )
     monkeypatch.setattr(
-        "tinyinfer.chat.urllib.request.urlopen",
-        lambda request: (_ for _ in ()).throw(error),
+        "tinyinfer.client.urllib.request.urlopen",
+        lambda request, *, timeout: (_ for _ in ()).throw(error),
     )
 
-    with pytest.raises(ChatClientError, match="server returned HTTP 503: model is busy"):
-        ChatClient("localhost:8000").complete(
+    with pytest.raises(ClientError, match="server returned HTTP 503: model is busy"):
+        TinyInferClient("localhost:8000").create_chat_completion(
             [{"role": "user", "content": "Hello"}],
             max_tokens=4,
             on_text=lambda _: None,
@@ -339,7 +344,7 @@ def test_chat_client_translates_http_errors(monkeypatch) -> None:
 def test_interrupted_stream_does_not_commit_partial_history(monkeypatch) -> None:
     post_payloads = []
 
-    def urlopen(request):
+    def urlopen(request, *, timeout):
         if request.get_method() == "GET":
             return health_response()
         post_payloads.append(json.loads(request.data))
@@ -351,11 +356,11 @@ def test_interrupted_stream_does_not_commit_partial_history(monkeypatch) -> None
             )
         return completion_response(text="recovered")
 
-    monkeypatch.setattr("tinyinfer.chat.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("tinyinfer.client.urllib.request.urlopen", urlopen)
     output = io.StringIO()
 
     result = run_chat_session(
-        ChatClient("localhost:8000"),
+        TinyInferClient("localhost:8000"),
         system_prompt="system",
         max_tokens=8,
         input_fn=scripted_input("first", "second", "/quit"),
