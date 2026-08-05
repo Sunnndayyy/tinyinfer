@@ -25,6 +25,7 @@ def test_model_commands_default_to_reference_runtime(command: str) -> None:
 
     assert args.kv_cache == "contiguous"
     assert args.decoding == "autoregressive"
+    assert args.attention == "eager"
 
 
 @pytest.mark.parametrize("cache_name", ["none", "contiguous", "paged"])
@@ -38,6 +39,13 @@ def test_model_commands_accept_autoregressive_decoding() -> None:
     args = build_parser().parse_args(["bench", "--decoding", "autoregressive"])
 
     assert args.decoding == "autoregressive"
+
+
+@pytest.mark.parametrize("attention_name", ["eager", "sdpa"])
+def test_model_commands_accept_each_attention_implementation(attention_name: str) -> None:
+    args = build_parser().parse_args(["bench", "--attention", attention_name])
+
+    assert args.attention == attention_name
 
 
 def test_benchmark_can_save_a_named_profile() -> None:

@@ -27,7 +27,7 @@ def test_empty_distribution_is_zero_instead_of_crashing() -> None:
     assert distribution([]) == {"p50": 0.0, "p95": 0.0, "p99": 0.0}
 
 
-def test_summary_records_the_selected_decoding_implementation() -> None:
+def test_summary_records_the_selected_runtime_implementations() -> None:
     distribution_values = {"p50": 0.1, "p95": 0.2, "p99": 0.3}
     result = {
         "metadata": {
@@ -35,6 +35,7 @@ def test_summary_records_the_selected_decoding_implementation() -> None:
             "device": "cpu",
             "dtype": "float32",
             "decoding": "autoregressive",
+            "attention": "sdpa",
             "kv_cache": "contiguous",
             "repetitions": 1,
             "warmup": 0,
@@ -52,6 +53,11 @@ def test_summary_records_the_selected_decoding_implementation() -> None:
     summary = format_summary(result)
 
     assert "decoding: autoregressive" in summary
+    assert "attention: sdpa" in summary
+
+    result["metadata"].pop("attention")
+
+    assert "attention: unknown" in format_summary(result)
 
 
 def test_decode_throughput_excludes_time_to_first_token(monkeypatch) -> None:
@@ -97,7 +103,7 @@ def test_unknown_benchmark_profile_is_actionable() -> None:
         )
 
 
-def leaderboard_result(cache: str, decode_tps: float) -> dict:
+def leaderboard_result(cache: str, decode_tps: float, attention: str = "eager") -> dict:
     return {
         "metadata": {
             "model": "Qwen/Qwen2.5-1.5B-Instruct",
@@ -106,6 +112,7 @@ def leaderboard_result(cache: str, decode_tps: float) -> dict:
             "dtype": "torch.bfloat16",
             "profile": "decode",
             "decoding": "autoregressive",
+            "attention": attention,
             "kv_cache": cache,
         },
         "metrics": {
@@ -122,10 +129,11 @@ def test_saved_results_upsert_one_summary_per_configuration(tmp_path) -> None:
     save_leaderboard_result(leaderboard_result("none", 10.0), store)
     save_leaderboard_result(leaderboard_result("contiguous", 20.0), store)
     save_leaderboard_result(leaderboard_result("contiguous", 22.0), store)
+    save_leaderboard_result(leaderboard_result("contiguous", 30.0, "sdpa"), store)
 
     saved = json.loads(store.read_text())
-    assert len(saved) == 2
-    assert [row["decode_tokens_per_second"] for row in saved] == [10.0, 22.0]
+    assert len(saved) == 3
+    assert [row["decode_tokens_per_second"] for row in saved] == [10.0, 22.0, 30.0]
     assert all("runs" not in row for row in saved)
 
 
@@ -158,7 +166,9 @@ def test_legacy_saved_results_default_to_autoregressive(tmp_path) -> None:
         )
     )
 
-    assert load_records(store)[0]["decoding"] == "autoregressive"
+    record = load_records(store)[0]
+    assert record["decoding"] == "autoregressive"
+    assert record["attention"] == "unknown"
 
 
 def test_leaderboard_compares_decode_speed_with_uncached_baseline() -> None:
@@ -169,6 +179,7 @@ def test_leaderboard_compares_decode_speed_with_uncached_baseline() -> None:
             "device": "mps",
             "dtype": "torch.bfloat16",
             "profile": "decode",
+            "attention": "eager",
             "kv_cache": "none",
             "ttft_seconds": 0.4,
             "decode_tokens_per_second": 10.0,
@@ -179,6 +190,7 @@ def test_leaderboard_compares_decode_speed_with_uncached_baseline() -> None:
             "device": "mps",
             "dtype": "torch.bfloat16",
             "profile": "decode",
+            "attention": "eager",
             "kv_cache": "contiguous",
             "ttft_seconds": 0.4,
             "decode_tokens_per_second": 20.0,
@@ -187,8 +199,8 @@ def test_leaderboard_compares_decode_speed_with_uncached_baseline() -> None:
 
     markdown = format_leaderboard(rows)
 
-    assert "| autoregressive | none | 0.400s | 10.0 | baseline |" in markdown
-    assert "| autoregressive | contiguous | 0.400s | 20.0 | +100.0% |" in markdown
+    assert "| autoregressive | eager | none | 0.400s | 10.0 | baseline |" in markdown
+    assert "| autoregressive | eager | contiguous | 0.400s | 20.0 | +100.0% |" in markdown
 
 
 def test_saving_requires_a_named_profile(tmp_path) -> None:

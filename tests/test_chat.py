@@ -18,6 +18,7 @@ HEALTH_PAYLOAD = {
     "dtype": "bfloat16",
     "kv_cache": "contiguous",
     "decoding": "autoregressive",
+    "attention": "sdpa",
     "sampling": {"strategy": "greedy", "temperature": 0.0},
 }
 
@@ -68,6 +69,24 @@ class TimedHTTPResponse(HTTPResponse):
 
 def health_response() -> HTTPResponse:
     return HTTPResponse(body=json.dumps(HEALTH_PAYLOAD).encode("utf-8"))
+
+
+def test_server_info_keeps_the_previous_constructor_signature() -> None:
+    info = ServerInfo(
+        "0.1.0",
+        "tiny",
+        "qwen2",
+        2,
+        128,
+        "cpu",
+        "float32",
+        "contiguous",
+        "greedy",
+        0.0,
+    )
+
+    assert info.decoding == "unknown"
+    assert info.attention == "unknown"
 
 
 def completion_response(
@@ -121,6 +140,7 @@ class RecordingClient:
             dtype="bfloat16",
             kv_cache="contiguous",
             decoding="autoregressive",
+            attention="sdpa",
             sampling_strategy="greedy",
             temperature=0.0,
         )
@@ -292,6 +312,7 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
         dtype="bfloat16",
         kv_cache="contiguous",
         decoding="autoregressive",
+        attention="sdpa",
         sampling_strategy="greedy",
         temperature=0.0,
     )
@@ -312,6 +333,7 @@ def test_server_info_keeps_decoding_optional_for_older_callers() -> None:
     )
 
     assert info.decoding == "unknown"
+    assert info.attention == "unknown"
 
 
 def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> None:

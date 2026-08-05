@@ -8,8 +8,8 @@ dist/
 build/
 *.egg-info/
 .tinyinfer/
+ARCHITECTURE.md
 docs/
 */docs/plans/*
 docs/agents/*
 */docs/agents
-
