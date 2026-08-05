@@ -126,6 +126,19 @@ baseline. `contiguous` preallocates a request-local cache and is the default.
 `paged` allocates fixed-size blocks lazily, but currently gathers them before
 eager attention; it teaches paging and is not yet a PagedAttention speedup.
 
+For comparable decode experiments, save one aggregate result per configuration
+to the ignored local cache, then regenerate the tracked leaderboard. Run these
+from the repository root, one at a time:
+
+```bash
+tinyinfer bench --profile decode --kv-cache none --save
+tinyinfer bench --profile decode --kv-cache contiguous --save
+tinyinfer leaderboard
+```
+
+Only `BENCHMARKS.md` belongs in Git. TinyInfer does not retain prompts,
+generated text, or individual benchmark runs when `--save` is used.
+
 ## Current limitations
 
 - Qwen2 only; V0 is checked against Qwen2.5-1.5B-Instruct.
