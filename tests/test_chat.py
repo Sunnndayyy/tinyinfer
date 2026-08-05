@@ -234,7 +234,7 @@ def test_empty_turn_is_not_added_to_conversation_history() -> None:
 def test_chat_client_reads_health_metadata(monkeypatch) -> None:
     requests = []
 
-    def urlopen(request):
+    def urlopen(request, *, timeout):
         requests.append(request)
         return health_response()
 
@@ -260,7 +260,7 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
 def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> None:
     requests = []
 
-    def urlopen(request):
+    def urlopen(request, *, timeout):
         requests.append(request)
         return completion_response()
 
@@ -307,7 +307,10 @@ def test_chat_client_posts_history_and_parses_terminal_metrics(monkeypatch) -> N
     ],
 )
 def test_chat_client_rejects_incomplete_streams(monkeypatch, response, message) -> None:
-    monkeypatch.setattr("tinyinfer.client.urllib.request.urlopen", lambda request: response)
+    monkeypatch.setattr(
+        "tinyinfer.client.urllib.request.urlopen",
+        lambda request, *, timeout: response,
+    )
 
     with pytest.raises(ClientError, match=message):
         TinyInferClient("localhost:8000").create_chat_completion(
@@ -327,7 +330,7 @@ def test_chat_client_translates_http_errors(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "tinyinfer.client.urllib.request.urlopen",
-        lambda request: (_ for _ in ()).throw(error),
+        lambda request, *, timeout: (_ for _ in ()).throw(error),
     )
 
     with pytest.raises(ClientError, match="server returned HTTP 503: model is busy"):
@@ -341,7 +344,7 @@ def test_chat_client_translates_http_errors(monkeypatch) -> None:
 def test_interrupted_stream_does_not_commit_partial_history(monkeypatch) -> None:
     post_payloads = []
 
-    def urlopen(request):
+    def urlopen(request, *, timeout):
         if request.get_method() == "GET":
             return health_response()
         post_payloads.append(json.loads(request.data))

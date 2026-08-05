@@ -44,15 +44,16 @@ def _error_message(error: urllib.error.HTTPError) -> str:
 
 
 class TinyInferClient:
-    def __init__(self, host: str):
+    def __init__(self, host: str, *, timeout: float = 30.0):
         self.host = host.rstrip("/")
         if "://" not in self.host:
             self.host = f"http://{self.host}"
+        self.timeout = timeout
 
     def get_server_info(self) -> ServerInfo:
         request = urllib.request.Request(f"{self.host}/health", method="GET")
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as error:
             raise ClientError(_error_message(error)) from error
@@ -104,7 +105,7 @@ class TinyInferClient:
         completion: ChatCompletion | None = None
 
         try:
-            with urllib.request.urlopen(request) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 for raw_line in response:
                     line = raw_line.decode("utf-8").strip()
                     if not line.startswith("data: ") or line == "data: [DONE]":
