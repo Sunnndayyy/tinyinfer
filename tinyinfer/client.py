@@ -112,7 +112,12 @@ class TinyInferClient:
                     try:
                         chunk = json.loads(line[6:])
                         choice = chunk["choices"][0]
-                        content = choice["delta"].get("content", "")
+                        delta = choice["delta"]
+                        if not isinstance(choice, dict) or not isinstance(delta, dict):
+                            raise TypeError("invalid stream choice")
+                        content = delta.get("content", "")
+                        if not isinstance(content, str):
+                            raise TypeError("invalid stream content")
                     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
                         raise ClientError("the server sent an invalid chat stream") from error
                     if content:
