@@ -16,7 +16,7 @@ def test_chat_command_is_interactive_and_only_needs_a_host() -> None:
 
 
 @pytest.mark.parametrize("command", ["generate", "serve", "bench"])
-def test_model_commands_default_to_contiguous_kv_cache(command: str) -> None:
+def test_model_commands_default_to_reference_runtime(command: str) -> None:
     arguments = [command]
     if command == "generate":
         arguments.extend(("--prompt", "hello"))
@@ -24,6 +24,7 @@ def test_model_commands_default_to_contiguous_kv_cache(command: str) -> None:
     args = build_parser().parse_args(arguments)
 
     assert args.kv_cache == "contiguous"
+    assert args.decoding == "autoregressive"
     assert args.attention == "eager"
 
 
@@ -32,6 +33,12 @@ def test_model_commands_accept_each_kv_cache(cache_name: str) -> None:
     args = build_parser().parse_args(["bench", "--kv-cache", cache_name])
 
     assert args.kv_cache == cache_name
+
+
+def test_model_commands_accept_autoregressive_decoding() -> None:
+    args = build_parser().parse_args(["bench", "--decoding", "autoregressive"])
+
+    assert args.decoding == "autoregressive"
 
 
 @pytest.mark.parametrize("attention_name", ["eager", "sdpa"])

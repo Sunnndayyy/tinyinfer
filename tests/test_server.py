@@ -15,6 +15,7 @@ class RecordingEngine:
         self.calls = []
         self.device = torch.device("cpu")
         self.kv_cache_name = "contiguous"
+        self.decoding_name = "autoregressive"
         self.attention_name = "sdpa"
         self.model = SimpleNamespace(
             config=SimpleNamespace(
@@ -115,6 +116,7 @@ def test_health_describes_the_loaded_runtime_and_model() -> None:
         "device": "cpu",
         "dtype": "float32",
         "kv_cache": "contiguous",
+        "decoding": "autoregressive",
         "attention": "sdpa",
         "sampling": {"strategy": "greedy", "temperature": 0.0},
     }

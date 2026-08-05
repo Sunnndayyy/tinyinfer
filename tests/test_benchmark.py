@@ -9,6 +9,7 @@ from tinyinfer.benchmark import (
     distribution,
     format_leaderboard,
     format_summary,
+    load_records,
     percentile,
     run_once,
     save_leaderboard_result,
@@ -26,28 +27,33 @@ def test_empty_distribution_is_zero_instead_of_crashing() -> None:
     assert distribution([]) == {"p50": 0.0, "p95": 0.0, "p99": 0.0}
 
 
-def test_summary_records_the_attention_implementation() -> None:
+def test_summary_records_the_selected_runtime_implementations() -> None:
+    distribution_values = {"p50": 0.1, "p95": 0.2, "p99": 0.3}
     result = {
         "metadata": {
-            "model": "tiny",
+            "model": "test-model",
             "device": "cpu",
-            "dtype": "torch.float32",
+            "dtype": "float32",
+            "decoding": "autoregressive",
             "attention": "sdpa",
             "kv_cache": "contiguous",
             "repetitions": 1,
             "warmup": 0,
         },
         "metrics": {
-            "time_to_first_token_seconds": {"p50": 0.1, "p95": 0.1, "p99": 0.1},
-            "inter_token_latency_seconds": {"p50": 0.1, "p95": 0.1, "p99": 0.1},
-            "end_to_end_latency_seconds": {"p50": 0.1, "p95": 0.1, "p99": 0.1},
-            "output_tokens_per_second": {"mean": 10.0, "p50": 10.0},
-            "decode_tokens_per_second": {"p50": 9.0, "p95": 9.0, "p99": 9.0},
-            "kv_cache_bytes": 16,
+            "time_to_first_token_seconds": distribution_values,
+            "inter_token_latency_seconds": distribution_values,
+            "end_to_end_latency_seconds": distribution_values,
+            "output_tokens_per_second": {**distribution_values, "mean": 10.0},
+            "decode_tokens_per_second": distribution_values,
+            "kv_cache_bytes": 128,
         },
     }
 
-    assert "attention: sdpa" in format_summary(result)
+    summary = format_summary(result)
+
+    assert "decoding: autoregressive" in summary
+    assert "attention: sdpa" in summary
 
     result["metadata"].pop("attention")
 
@@ -105,6 +111,7 @@ def leaderboard_result(cache: str, decode_tps: float, attention: str = "eager") 
             "device": "mps",
             "dtype": "torch.bfloat16",
             "profile": "decode",
+            "decoding": "autoregressive",
             "attention": attention,
             "kv_cache": cache,
         },
@@ -138,6 +145,32 @@ def test_corrupt_local_results_have_an_actionable_error(tmp_path) -> None:
         save_leaderboard_result(leaderboard_result("none", 10.0), store)
 
 
+def test_legacy_saved_results_default_to_autoregressive(tmp_path) -> None:
+    store = tmp_path / "benchmarks.json"
+    legacy = leaderboard_result("none", 10.0)
+    del legacy["metadata"]["decoding"]
+    store.write_text(
+        json.dumps(
+            [
+                {
+                    "model": legacy["metadata"]["model"],
+                    "hardware": legacy["metadata"]["hardware"],
+                    "device": legacy["metadata"]["device"],
+                    "dtype": legacy["metadata"]["dtype"],
+                    "profile": legacy["metadata"]["profile"],
+                    "kv_cache": legacy["metadata"]["kv_cache"],
+                    "ttft_seconds": 0.4,
+                    "decode_tokens_per_second": 10.0,
+                }
+            ]
+        )
+    )
+
+    record = load_records(store)[0]
+    assert record["decoding"] == "autoregressive"
+    assert record["attention"] == "unknown"
+
+
 def test_leaderboard_compares_decode_speed_with_uncached_baseline() -> None:
     rows = [
         {
@@ -166,8 +199,8 @@ def test_leaderboard_compares_decode_speed_with_uncached_baseline() -> None:
 
     markdown = format_leaderboard(rows)
 
-    assert "| eager | none | 0.400s | 10.0 | baseline |" in markdown
-    assert "| eager | contiguous | 0.400s | 20.0 | +100.0% |" in markdown
+    assert "| autoregressive | eager | none | 0.400s | 10.0 | baseline |" in markdown
+    assert "| autoregressive | eager | contiguous | 0.400s | 20.0 | +100.0% |" in markdown
 
 
 def test_saving_requires_a_named_profile(tmp_path) -> None:

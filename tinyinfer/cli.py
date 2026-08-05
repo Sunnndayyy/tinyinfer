@@ -7,7 +7,14 @@ from collections.abc import Sequence
 
 from tinyinfer.artifacts import DEFAULT_MODEL, resolve_model
 from tinyinfer.client import TinyInferClient
-from tinyinfer.runtime import ATTENTION_NAMES, DEFAULT_ATTENTION, DEFAULT_KV_CACHE, KV_CACHE_NAMES
+from tinyinfer.runtime import (
+    ATTENTION_NAMES,
+    DECODING_NAMES,
+    DEFAULT_ATTENTION,
+    DEFAULT_DECODING,
+    DEFAULT_KV_CACHE,
+    KV_CACHE_NAMES,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
     )
+    generate.add_argument("--decoding", choices=DECODING_NAMES, default=DEFAULT_DECODING)
     generate.add_argument("--attention", choices=ATTENTION_NAMES, default=DEFAULT_ATTENTION)
     generate.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     generate.add_argument("--cache-dir")
@@ -42,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
     )
+    serve.add_argument("--decoding", choices=DECODING_NAMES, default=DEFAULT_DECODING)
     serve.add_argument("--attention", choices=ATTENTION_NAMES, default=DEFAULT_ATTENTION)
     serve.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     serve.add_argument("--cache-dir")
@@ -68,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--dtype", choices=("auto", "float32", "float16", "bfloat16"), default="auto"
     )
+    bench.add_argument("--decoding", choices=DECODING_NAMES, default=DEFAULT_DECODING)
     bench.add_argument("--attention", choices=ATTENTION_NAMES, default=DEFAULT_ATTENTION)
     bench.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
     bench.add_argument("--cache-dir")
@@ -92,6 +102,7 @@ def run_generate(args: argparse.Namespace) -> int:
         model_dir,
         device_name=args.device,
         dtype_name=args.dtype,
+        decoding_name=args.decoding,
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
     )
@@ -126,6 +137,7 @@ def run_serve(args: argparse.Namespace) -> int:
         model_dir,
         device_name=args.device,
         dtype_name=args.dtype,
+        decoding_name=args.decoding,
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
     )
@@ -182,6 +194,7 @@ def run_bench(args: argparse.Namespace) -> int:
         model_dir,
         device_name=args.device,
         dtype_name=args.dtype,
+        decoding_name=args.decoding,
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
     )
@@ -200,6 +213,7 @@ def run_bench(args: argparse.Namespace) -> int:
             "hardware": hardware_name(),
             "device": str(engine.device),
             "dtype": str(next(engine.model.parameters()).dtype),
+            "decoding": engine.decoding_name,
             "attention": engine.attention_name,
             "profile": options.profile,
             "kv_cache": engine.kv_cache_name,

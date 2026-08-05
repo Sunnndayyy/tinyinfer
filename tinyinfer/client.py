@@ -25,6 +25,7 @@ class ServerInfo:
     kv_cache: str
     sampling_strategy: str
     temperature: float
+    decoding: str = "unknown"
     attention: str = "unknown"
 
 
@@ -84,6 +85,7 @@ class TinyInferClient:
                 dtype=str(payload.get("dtype", "unknown")),
                 attention=str(payload.get("attention", "unknown")),
                 kv_cache=str(payload.get("kv_cache", "unknown")),
+                decoding=str(payload.get("decoding", "unknown")),
                 sampling_strategy=str(payload["sampling"]["strategy"]),
                 temperature=float(payload["sampling"]["temperature"]),
             )
