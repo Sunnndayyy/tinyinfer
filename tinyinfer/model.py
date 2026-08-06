@@ -20,6 +20,7 @@ from tinyinfer.kv_cache import KVCache
 from tinyinfer.kv_cache.none import NoKVCache
 from tinyinfer.quantization import Q8Embedding, Q8Linear, read_quantization_config
 from tinyinfer.quantization.format import scale_name
+from tinyinfer.quantization.metal import require_q8_mps
 
 
 @dataclass(frozen=True)
@@ -374,8 +375,12 @@ class QwenForCausalLM(nn.Module):
         attention_name: AttentionName = DEFAULT_ATTENTION,
     ) -> QwenForCausalLM:
         quantization = read_quantization_config(model_dir)
-        if quantization and device.type != "cpu":
-            raise ValueError("Q8 checkpoints currently use TinyInfer's CPU reference runtime")
+        if quantization and device.type == "mps":
+            require_q8_mps()
+            if dtype != torch.bfloat16:
+                raise ValueError("Q8 on MPS requires bfloat16 activations")
+        elif quantization and device.type != "cpu":
+            raise ValueError(f"Q8 checkpoints do not support device {device.type!r}")
         config = QwenConfig.from_directory(model_dir)
         with torch.device("meta"):
             model = cls(config, attention_name=attention_name)

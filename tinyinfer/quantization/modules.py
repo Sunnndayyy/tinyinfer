@@ -1,10 +1,11 @@
-"""Inference modules backed by readable Q8 reference operations."""
+"""Inference modules backed by packed Q8 operations."""
 
 import torch
 from torch import Tensor, nn
 
 from .int8 import GROUP_SIZE, dequantize_q8, quantize_q8
-from .linear import q8_linear_reference
+from .linear import _q8_linear_module
+from .metal import q8_embedding_mps
 
 
 def _empty_q8_weight(weight: Tensor) -> tuple[Tensor, Tensor]:
@@ -34,7 +35,7 @@ class Q8Linear(nn.Module):
         return cls(weight, scales, bias)
 
     def forward(self, inputs: Tensor) -> Tensor:
-        output = q8_linear_reference(inputs, self.weight, self.scales, self.bias)
+        output = _q8_linear_module(inputs, self.weight, self.scales, self.bias)
         return output.to(inputs.dtype)
 
 
@@ -61,6 +62,10 @@ class Q8Embedding(nn.Module):
         return cls(weight, scales, output_dtype)
 
     def forward(self, input_ids: Tensor) -> Tensor:
+        if input_ids.device.type == "mps":
+            if self._output_dtype.dtype != torch.bfloat16:
+                raise ValueError("Q8 embedding on MPS requires bfloat16 output dtype")
+            return q8_embedding_mps(input_ids, self.weight, self.scales)
         width = self.weight.shape[1]
         weights = self.weight[input_ids].reshape(-1, width)
         scales = self.scales[input_ids].reshape(-1, self.scales.shape[1])
@@ -69,5 +74,5 @@ class Q8Embedding(nn.Module):
 
     def project(self, inputs: Tensor) -> Tensor:
         """Reuse the tied embedding weights for the vocabulary projection."""
-        output = q8_linear_reference(inputs, self.weight, self.scales)
+        output = _q8_linear_module(inputs, self.weight, self.scales)
         return output.to(inputs.dtype)
