@@ -6,13 +6,13 @@ from huggingface_hub import snapshot_download
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
 
-REQUIRED_MODEL_FILES = (
+MODEL_METADATA_FILES = (
     "config.json",
     "generation_config.json",
-    "model*.safetensors",
     "tokenizer.json",
     "tokenizer_config.json",
 )
+REQUIRED_MODEL_FILES = (*MODEL_METADATA_FILES, "model*.safetensors")
 
 
 def resolve_model(model: str, cache_dir: str | Path | None = None) -> Path:

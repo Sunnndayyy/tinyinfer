@@ -37,6 +37,10 @@ class RecordingModel:
     def parameters(self):
         return iter((self.weight,))
 
+    @property
+    def activation_dtype(self) -> torch.dtype:
+        return self.weight.dtype
+
     def set_attention(self, name: str) -> None:
         self.attention_name = name
 

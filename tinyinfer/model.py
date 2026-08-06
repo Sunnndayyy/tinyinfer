@@ -18,7 +18,8 @@ from tinyinfer.attention import (
 )
 from tinyinfer.kv_cache import KVCache
 from tinyinfer.kv_cache.none import NoKVCache
-from tinyinfer.quantization import Q8Embedding, Q8Linear
+from tinyinfer.quantization import Q8Embedding, Q8Linear, read_quantization_config
+from tinyinfer.quantization.format import scale_name
 
 
 @dataclass(frozen=True)
@@ -314,15 +315,26 @@ class QwenForCausalLM(nn.Module):
     def set_attention(self, name: AttentionName) -> None:
         self.model.set_attention(name)
 
-    def quantize_q8_(self) -> QwenForCausalLM:
-        """Replace floating-point projection and embedding modules in place."""
+    @property
+    def activation_dtype(self) -> torch.dtype:
+        return self.model.norm.weight.dtype
+
+    @property
+    def quantization_name(self) -> str:
+        return "q8" if isinstance(self.model.embed_tokens, Q8Embedding) else "none"
+
+    def _replace_q8_modules_(self, linear_factory, embedding_factory) -> None:
         for layer in self.model.layers:
             attention = layer.self_attn
             for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
-                setattr(attention, name, Q8Linear.from_float(getattr(attention, name)))
+                setattr(attention, name, linear_factory(getattr(attention, name)))
             for name in ("gate_proj", "up_proj", "down_proj"):
-                setattr(layer.mlp, name, Q8Linear.from_float(getattr(layer.mlp, name)))
-        self.model.embed_tokens = Q8Embedding.from_float(self.model.embed_tokens)
+                setattr(layer.mlp, name, linear_factory(getattr(layer.mlp, name)))
+        self.model.embed_tokens = embedding_factory(self.model.embed_tokens)
+
+    def quantize_q8_(self) -> QwenForCausalLM:
+        """Replace floating-point projection and embedding modules in place."""
+        self._replace_q8_modules_(Q8Linear.from_float, Q8Embedding.from_float)
         return self
 
     def _project_logits(self, hidden_states: Tensor) -> Tensor:
@@ -361,20 +373,58 @@ class QwenForCausalLM(nn.Module):
         dtype: torch.dtype,
         attention_name: AttentionName = DEFAULT_ATTENTION,
     ) -> QwenForCausalLM:
+        quantization = read_quantization_config(model_dir)
+        if quantization and device.type != "cpu":
+            raise ValueError("Q8 checkpoints currently use TinyInfer's CPU reference runtime")
         config = QwenConfig.from_directory(model_dir)
         with torch.device("meta"):
             model = cls(config, attention_name=attention_name)
+            if quantization:
+                model._replace_q8_modules_(
+                    Q8Linear.empty_like,
+                    lambda embedding: Q8Embedding.empty_like(embedding, dtype),
+                )
 
         expected = set(model.state_dict())
+        if quantization:
+            expected_q8 = {name for name in expected if scale_name(name) in expected}
+            if set(quantization.tensors) != expected_q8:
+                raise ValueError("quantization metadata does not match the Qwen model")
         loaded: set[str] = set()
         unexpected: set[str] = set()
+        q8_weights = set(quantization.tensors) if quantization else set()
+        q8_scales = {scale_name(name) for name in q8_weights}
         for shard_path in weight_shards(model_dir):
             shard = load_file(str(shard_path), device="cpu")
+            repeated = loaded.intersection(shard)
+            if repeated:
+                raise ValueError(f"checkpoint repeats tensors across shards: {sorted(repeated)}")
+            if quantization:
+                for name, tensor in shard.items():
+                    expected_dtype = (
+                        torch.int8
+                        if name in q8_weights
+                        else torch.float16
+                        if name in q8_scales
+                        else None
+                    )
+                    if expected_dtype and tensor.dtype != expected_dtype:
+                        raise ValueError(
+                            f"quantized tensor {name} must be {expected_dtype}, got {tensor.dtype}"
+                        )
+                # Packed integers and FP16 scales keep their storage dtypes.
+                shard = {
+                    name: tensor
+                    if not tensor.is_floating_point() or name.endswith(".scales")
+                    else tensor.to(dtype)
+                    for name, tensor in shard.items()
+                }
             result = model.load_state_dict(shard, strict=False, assign=True)
             loaded.update(shard)
             unexpected.update(result.unexpected_keys)
 
-        unexpected.discard("lm_head.weight")
+        if not quantization:
+            unexpected.discard("lm_head.weight")
         missing = expected - loaded
         if missing or unexpected:
             raise ValueError(
@@ -382,6 +432,9 @@ class QwenForCausalLM(nn.Module):
                 f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
             )
 
-        model = model.to(device=device, dtype=dtype)
+        if quantization:
+            model = model.to(device=device)
+        else:
+            model = model.to(device=device, dtype=dtype)
         model.eval()
         return model

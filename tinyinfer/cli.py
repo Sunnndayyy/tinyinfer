@@ -28,6 +28,13 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("model", nargs="?", default=DEFAULT_MODEL)
     download.add_argument("--cache-dir")
 
+    quantize = commands.add_parser("quantize", help="convert a model to packed Q8 weights")
+    quantize.add_argument("model")
+    quantize.add_argument("--format", choices=("q8",), default="q8")
+    quantize.add_argument("--output", required=True)
+    quantize.add_argument("--group-size", type=int, choices=(32,), default=32)
+    quantize.add_argument("--cache-dir")
+
     generate = commands.add_parser("generate", help="generate text locally with TinyInfer")
     generate.add_argument("model", nargs="?", default=DEFAULT_MODEL)
     generate.add_argument("--prompt", required=True)
@@ -90,6 +97,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_download(args: argparse.Namespace) -> int:
     print(resolve_model(args.model, args.cache_dir))
+    return 0
+
+
+def run_quantize(args: argparse.Namespace) -> int:
+    from tinyinfer.quantization.convert import convert_checkpoint
+
+    source = resolve_model(args.model, args.cache_dir)
+    revision = source.name if source.parent.name == "snapshots" else None
+    output = convert_checkpoint(
+        source,
+        args.output,
+        source_model=args.model,
+        source_revision=revision,
+        format_name=args.format,
+        group_size=args.group_size,
+    )
+    print(output)
     return 0
 
 
@@ -254,6 +278,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "download":
         return run_download(args)
+    if args.command == "quantize":
+        return run_quantize(args)
     if args.command == "generate":
         return run_generate(args)
     if args.command == "serve":
