@@ -56,7 +56,7 @@ class AutoregressiveDecoder:
             capacity=len(prompt_ids) + max_new_tokens - 1,
             block_size=self.kv_cache_block_size,
             device=self.device,
-            dtype=next(self.model.parameters()).dtype,
+            dtype=self.model.activation_dtype,
         )
         self.last_cache_bytes = cache.bytes_allocated
 

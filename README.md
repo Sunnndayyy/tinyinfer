@@ -48,6 +48,26 @@ Download the default model (roughly 3 GB):
 tinyinfer download Qwen/Qwen2.5-1.5B-Instruct
 ```
 
+Convert it to TinyInfer's Q8 Safetensors format:
+
+```bash
+tinyinfer quantize Qwen/Qwen2.5-1.5B-Instruct \
+  --format q8 \
+  --output .tinyinfer/models/qwen2.5-1.5b-q8
+```
+
+The Q8 directory is self-contained and keeps the tied embedding/output matrix
+once. For now it runs through the deliberately slow CPU oracle; PR 3 will add
+the fused MPS kernel that provides the speedup.
+
+```bash
+tinyinfer generate .tinyinfer/models/qwen2.5-1.5b-q8 \
+  --device cpu \
+  --dtype float32 \
+  --prompt "What does weight quantization save?" \
+  --max-new-tokens 8
+```
+
 Take the model for a spin:
 
 ```bash
@@ -158,7 +178,8 @@ generated text, or individual benchmark runs when `--save` is used.
 - Request-local contiguous and educational paged KV caches; no shared cache pool.
 - Selectable eager and PyTorch SDPA attention; no FlashAttention-specific route yet.
 - BF16 MPS by default on Apple Silicon; CPU uses float32.
-- No quantization, request queue, auth, Linux/CUDA, or distributed execution.
+- Q8 conversion and CPU reference inference only; fused MPS execution is next.
+- No request queue, auth, Linux/CUDA, or distributed execution.
 
 ## Development
 

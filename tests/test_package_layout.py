@@ -24,6 +24,8 @@ ROADMAP_MODULES = (
     "tinyinfer.quantization.int4",
     "tinyinfer.quantization.linear",
     "tinyinfer.quantization.modules",
+    "tinyinfer.quantization.format",
+    "tinyinfer.quantization.convert",
     "tinyinfer.parallelism.tensor",
     "tinyinfer.parallelism.pipeline",
 )

@@ -32,6 +32,10 @@ class RecordingModel:
     def parameters(self):
         return iter((self.weight,))
 
+    @property
+    def activation_dtype(self) -> torch.dtype:
+        return self.weight.dtype
+
     def next_token_logits(self, input_ids, *, cache, position):
         self.calls.append((input_ids.shape[1], position, type(cache).__name__))
         keys = torch.zeros(

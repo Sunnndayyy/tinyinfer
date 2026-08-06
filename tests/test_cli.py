@@ -63,6 +63,27 @@ def test_leaderboard_command_needs_no_arguments() -> None:
     assert args.command == "leaderboard"
 
 
+def test_quantize_command_accepts_a_q8_output_directory() -> None:
+    args = build_parser().parse_args(
+        ["quantize", "Tiny/Qwen", "--format", "q8", "--output", "model-q8"]
+    )
+
+    assert args.command == "quantize"
+    assert args.model == "Tiny/Qwen"
+    assert args.format == "q8"
+    assert args.output == "model-q8"
+    assert args.group_size == 32
+
+
+def test_quantize_command_rejects_an_unsupported_group_size() -> None:
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(
+            ["quantize", "Tiny/Qwen", "--output", "model-q8", "--group-size", "64"]
+        )
+
+    assert error.value.code == 2
+
+
 def test_leaderboard_prints_generated_markdown(monkeypatch, capsys) -> None:
     monkeypatch.setattr(benchmark, "write_leaderboard", lambda: "# Results\n")
 
