@@ -57,13 +57,13 @@ tinyinfer quantize Qwen/Qwen2.5-1.5B-Instruct \
 ```
 
 The Q8 directory is self-contained and keeps the tied embedding/output matrix
-once. For now it runs through the deliberately slow CPU oracle; PR 3 will add
-the fused MPS kernel that provides the speedup.
+once. On Apple Silicon, packed weights and FP16 scales are read directly by a
+fused Metal linear kernel; CPU keeps the deliberately slow reference path.
 
 ```bash
 tinyinfer generate .tinyinfer/models/qwen2.5-1.5b-q8 \
-  --device cpu \
-  --dtype float32 \
+  --device mps \
+  --dtype bfloat16 \
   --prompt "What does weight quantization save?" \
   --max-new-tokens 8
 ```
@@ -167,8 +167,20 @@ tinyinfer bench --profile decode --kv-cache contiguous --save
 tinyinfer leaderboard
 ```
 
-Only `BENCHMARKS.md` belongs in Git. TinyInfer does not retain prompts,
-generated text, or individual benchmark runs when `--save` is used.
+Of the end-to-end benchmark outputs, only `BENCHMARKS.md` belongs in Git.
+TinyInfer does not retain prompts, generated text, or individual runs when
+`--save` is used.
+
+The fused Q8 operator has a separate warmed MPS benchmark for the two Qwen
+decode shapes used as its promotion gate:
+
+```bash
+.venv/bin/python benchmarks/q8_mps_linear.py
+```
+
+See the [M4 Pro Q8 benchmark note](benchmarks/README.md) for the
+retained operator, decode-throughput, and TTFT results. TTFT is reported
+separately because Q8 speeds up steady-state decode while regressing prefill.
 
 ## Current limitations
 
@@ -178,7 +190,7 @@ generated text, or individual benchmark runs when `--save` is used.
 - Request-local contiguous and educational paged KV caches; no shared cache pool.
 - Selectable eager and PyTorch SDPA attention; no FlashAttention-specific route yet.
 - BF16 MPS by default on Apple Silicon; CPU uses float32.
-- Q8 conversion and CPU reference inference only; fused MPS execution is next.
+- Q8 conversion, a readable CPU oracle, and fused MPS execution.
 - No request queue, auth, Linux/CUDA, or distributed execution.
 
 ## Development

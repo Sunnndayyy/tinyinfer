@@ -331,17 +331,65 @@ def test_q8_loader_rejects_a_tensor_repeated_across_shards(tmp_path: Path) -> No
         )
 
 
-def test_q8_loader_rejects_mps_until_the_fused_runtime_exists(tmp_path: Path) -> None:
+def test_q8_loader_rejects_mps_without_custom_shader_support(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "q8"
+    write_checkpoint(QwenForCausalLM(tiny_q8_config()), source)
+    convert_checkpoint(source, output, source_model="Tiny/Qwen")
+    monkeypatch.delattr(torch.mps, "compile_shader", raising=False)
+
+    with pytest.raises(RuntimeError, match="torch.mps.compile_shader"):
+        QwenForCausalLM.from_pretrained(
+            output,
+            device=torch.device("mps"),
+            dtype=torch.bfloat16,
+        )
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="requires Apple MPS")
+def test_q8_checkpoint_runs_the_fused_model_on_mps(tmp_path: Path) -> None:
+    torch.manual_seed(29)
+    source = tmp_path / "source"
+    output = tmp_path / "q8"
+    write_checkpoint(QwenForCausalLM(tiny_q8_config()), source)
+    convert_checkpoint(source, output, source_model="Tiny/Qwen")
+    cpu_model = QwenForCausalLM.from_pretrained(
+        output,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    mps_model = QwenForCausalLM.from_pretrained(
+        output,
+        device=torch.device("mps"),
+        dtype=torch.bfloat16,
+    )
+    input_ids = torch.tensor([[1, 5, 7, 9]])
+
+    with torch.inference_mode():
+        expected = cpu_model(input_ids).to(torch.bfloat16)
+        actual = mps_model(input_ids.to("mps")).cpu()
+
+    assert all(
+        module.weight.device.type == "mps"
+        for module in mps_model.modules()
+        if isinstance(module, Q8Linear)
+    )
+    # Operator parity is tighter; this allows BF16 rounding through the complete tiny model.
+    torch.testing.assert_close(actual, expected, rtol=1e-1, atol=1e-1)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="requires Apple MPS")
+def test_q8_checkpoint_requires_bfloat16_activations_on_mps(tmp_path: Path) -> None:
     source = tmp_path / "source"
     output = tmp_path / "q8"
     write_checkpoint(QwenForCausalLM(tiny_q8_config()), source)
     convert_checkpoint(source, output, source_model="Tiny/Qwen")
 
-    with pytest.raises(ValueError, match="CPU reference runtime"):
+    with pytest.raises(ValueError, match="bfloat16"):
         QwenForCausalLM.from_pretrained(
             output,
             device=torch.device("mps"),
-            dtype=torch.bfloat16,
+            dtype=torch.float16,
         )
 
 

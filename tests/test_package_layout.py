@@ -23,6 +23,7 @@ ROADMAP_MODULES = (
     "tinyinfer.quantization.int8",
     "tinyinfer.quantization.int4",
     "tinyinfer.quantization.linear",
+    "tinyinfer.quantization.metal",
     "tinyinfer.quantization.modules",
     "tinyinfer.quantization.format",
     "tinyinfer.quantization.convert",
