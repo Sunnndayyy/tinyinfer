@@ -8,7 +8,7 @@ Q8_MAX = 127
 
 
 def quantize_q8_group(tensor: Tensor) -> tuple[Tensor, Tensor]:
-    """Quantize 32 floating-point weights into INT8 values and one scale factor"""
+    """Quantize 32 floating-point weights into INT8 values and a scale factor"""
 
     # validate input tensor is 32 weights
     if tensor.shape[0] != GROUP_SIZE:
@@ -28,6 +28,6 @@ def quantize_q8_group(tensor: Tensor) -> tuple[Tensor, Tensor]:
     return quantized, scale.to(torch.float32)
 
 def dequantize_q8_group(quantized: Tensor, scale: Tensor) -> Tensor:
-    """Approximately restore one group of Q8 weights."""
+    """Approximately restore a group of Q8 weights."""
     return quantized.to(torch.float32) * scale.to(torch.float32)
 
