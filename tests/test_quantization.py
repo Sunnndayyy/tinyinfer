@@ -1,13 +1,61 @@
 import pytest
 import torch
+import torch.nn.functional as F
+from torch import nn
 
 from tinyinfer.quantization import (
+    Q8Embedding,
+    Q8Linear,
     dequantize_q8,
     dequantize_q8_group,
     q8_linear_reference,
     quantize_q8,
     quantize_q8_group,
 )
+
+
+@pytest.mark.parametrize("use_bias", [False, True])
+@pytest.mark.parametrize("input_dtype", [torch.float16, torch.float32])
+def test_q8_linear_matches_the_reference_operation(
+    use_bias: bool, input_dtype: torch.dtype
+) -> None:
+    linear = nn.Linear(64, 4, bias=use_bias)
+    inputs = torch.linspace(-2, 3, steps=2 * 3 * 64).reshape(2, 3, 64).to(input_dtype)
+
+    q8_linear = Q8Linear.from_float(linear)
+    expected = q8_linear_reference(inputs, q8_linear.weight, q8_linear.scales, q8_linear.bias).to(
+        input_dtype
+    )
+    actual = q8_linear(inputs)
+
+    assert q8_linear.weight.dtype == torch.int8
+    assert q8_linear.scales.dtype == torch.float16
+    assert not tuple(q8_linear.parameters())
+    assert actual.dtype == input_dtype
+    torch.testing.assert_close(actual, expected)
+
+
+def test_q8_embedding_reuses_its_packed_weights_for_lookup_and_projection() -> None:
+    embedding = nn.Embedding(8, 64)
+    embedding.weight.data.copy_(torch.linspace(-4, 5, steps=8 * 64).reshape(8, 64))
+    token_ids = torch.tensor([[0, 3], [7, 3]])
+    hidden_states = torch.linspace(-1, 2, steps=2 * 64).reshape(2, 64)
+
+    q8_embedding = Q8Embedding.from_float(embedding)
+    restored = dequantize_q8(q8_embedding.weight, q8_embedding.scales)
+
+    assert set(q8_embedding.state_dict()) == {"weight", "scales"}
+    torch.testing.assert_close(q8_embedding(token_ids), F.embedding(token_ids, restored))
+    torch.testing.assert_close(
+        q8_embedding.project(hidden_states),
+        q8_linear_reference(hidden_states, q8_embedding.weight, q8_embedding.scales),
+    )
+
+
+def test_q8_embedding_follows_module_dtype_conversions() -> None:
+    embedding = Q8Embedding.from_float(nn.Embedding(8, 64)).to(torch.float16)
+
+    assert embedding(torch.tensor([0])).dtype == torch.float16
 
 
 def test_q8_quantize_dequantize_approximately_reconstructs_weights() -> None:

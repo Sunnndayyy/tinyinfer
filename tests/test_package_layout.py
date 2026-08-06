@@ -23,6 +23,7 @@ ROADMAP_MODULES = (
     "tinyinfer.quantization.int8",
     "tinyinfer.quantization.int4",
     "tinyinfer.quantization.linear",
+    "tinyinfer.quantization.modules",
     "tinyinfer.parallelism.tensor",
     "tinyinfer.parallelism.pipeline",
 )

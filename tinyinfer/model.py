@@ -18,6 +18,7 @@ from tinyinfer.attention import (
 )
 from tinyinfer.kv_cache import KVCache
 from tinyinfer.kv_cache.none import NoKVCache
+from tinyinfer.quantization import Q8Embedding, Q8Linear
 
 
 @dataclass(frozen=True)
@@ -313,6 +314,23 @@ class QwenForCausalLM(nn.Module):
     def set_attention(self, name: AttentionName) -> None:
         self.model.set_attention(name)
 
+    def quantize_q8_(self) -> QwenForCausalLM:
+        """Replace floating-point projection and embedding modules in place."""
+        for layer in self.model.layers:
+            attention = layer.self_attn
+            for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
+                setattr(attention, name, Q8Linear.from_float(getattr(attention, name)))
+            for name in ("gate_proj", "up_proj", "down_proj"):
+                setattr(layer.mlp, name, Q8Linear.from_float(getattr(layer.mlp, name)))
+        self.model.embed_tokens = Q8Embedding.from_float(self.model.embed_tokens)
+        return self
+
+    def _project_logits(self, hidden_states: Tensor) -> Tensor:
+        embedding = self.model.embed_tokens
+        if isinstance(embedding, Q8Embedding):
+            return embedding.project(hidden_states)
+        return F.linear(hidden_states, embedding.weight)
+
     def forward(
         self,
         input_ids: Tensor,
@@ -321,7 +339,7 @@ class QwenForCausalLM(nn.Module):
         position: int = 0,
     ) -> Tensor:
         hidden_states = self.model(input_ids, cache=cache, position=position)
-        return F.linear(hidden_states, self.model.embed_tokens.weight)
+        return self._project_logits(hidden_states)
 
     def next_token_logits(
         self,
@@ -332,7 +350,7 @@ class QwenForCausalLM(nn.Module):
     ) -> Tensor:
         """Project only the final position because generation ignores earlier logits."""
         final_hidden_state = self.model(input_ids, cache=cache, position=position)[:, -1, :]
-        return F.linear(final_hidden_state, self.model.embed_tokens.weight)
+        return self._project_logits(final_hidden_state)
 
     @classmethod
     def from_pretrained(

@@ -1,11 +1,15 @@
 import json
+from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 import torch
 from safetensors.torch import save_file
+from torch import nn
 
 from tinyinfer.kv_cache import create_kv_cache
 from tinyinfer.model import QwenConfig, QwenForCausalLM, causal_attention_mask, repeat_kv
+from tinyinfer.quantization import Q8Embedding, Q8Linear, dequantize_q8, quantize_q8
 
 
 def tiny_config() -> QwenConfig:
@@ -22,6 +26,35 @@ def tiny_config() -> QwenConfig:
         bos_token_id=1,
         eos_token_id=2,
     )
+
+
+def q8_tiny_config() -> QwenConfig:
+    return replace(tiny_config(), hidden_size=32, intermediate_size=64)
+
+
+def dequantize_model_weights(model: QwenForCausalLM) -> None:
+    for module in model.modules():
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            quantized, scales = quantize_q8(module.weight)
+            module.weight.data.copy_(dequantize_q8(quantized, scales))
+
+
+def test_q8_model_matches_the_same_weights_explicitly_dequantized() -> None:
+    torch.manual_seed(23)
+    source = QwenForCausalLM(q8_tiny_config()).eval()
+    expected = deepcopy(source)
+    actual = deepcopy(source).quantize_q8_()
+    input_ids = torch.tensor([[1, 5, 7, 9]])
+    dequantize_model_weights(expected)
+
+    with torch.inference_mode():
+        expected_logits = expected(input_ids)
+        actual_logits = actual(input_ids)
+
+    assert isinstance(actual.model.embed_tokens, Q8Embedding)
+    assert sum(isinstance(module, Q8Linear) for module in actual.modules()) == 14
+    assert not any(isinstance(module, nn.Linear) for module in actual.modules())
+    torch.testing.assert_close(actual_logits, expected_logits)
 
 
 def test_repeat_kv_expands_grouped_query_heads() -> None:
