@@ -16,6 +16,7 @@ HEALTH_PAYLOAD = {
     "context_length": 32_768,
     "device": "mps",
     "dtype": "bfloat16",
+    "quantization": "q8",
     "kv_cache": "contiguous",
     "decoding": "autoregressive",
     "attention": "sdpa",
@@ -87,6 +88,7 @@ def test_server_info_keeps_the_previous_constructor_signature() -> None:
 
     assert info.decoding == "unknown"
     assert info.attention == "unknown"
+    assert info.quantization == "unknown"
 
 
 def completion_response(
@@ -138,6 +140,7 @@ class RecordingClient:
             context_length=32_768,
             device="mps",
             dtype="bfloat16",
+            quantization="q8",
             kv_cache="contiguous",
             decoding="autoregressive",
             attention="sdpa",
@@ -224,6 +227,7 @@ def test_chat_session_keeps_history_and_clear_resets_it() -> None:
     assert "Qwen/Qwen2.5-1.5B-Instruct" in rendered
     assert "qwen2 · 28 layers · 32768 context" in rendered
     assert "autoregressive" in rendered
+    assert "weights    q8" in rendered
     assert "greedy (temperature 0) · max output 64" in rendered
     assert "Conversation cleared." in rendered
     assert "3 generated · TTFT 0.50s · 24.0 tok/s" in rendered
@@ -310,6 +314,7 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
         context_length=32_768,
         device="mps",
         dtype="bfloat16",
+        quantization="q8",
         kv_cache="contiguous",
         decoding="autoregressive",
         attention="sdpa",

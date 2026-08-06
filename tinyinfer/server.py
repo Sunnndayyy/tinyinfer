@@ -117,7 +117,7 @@ def completion_chunk(
 
 def engine_metadata(engine: Engine, model_name: str) -> dict[str, object]:
     config = engine.model.config
-    dtype = str(next(engine.model.parameters()).dtype).removeprefix("torch.")
+    dtype = str(engine.activation_dtype).removeprefix("torch.")
     return {
         "status": "ok",
         "runtime": __version__,
@@ -127,6 +127,7 @@ def engine_metadata(engine: Engine, model_name: str) -> dict[str, object]:
         "context_length": config.max_position_embeddings,
         "device": str(engine.device),
         "dtype": dtype,
+        "quantization": engine.quantization_name,
         "attention": engine.attention_name,
         "kv_cache": engine.kv_cache_name,
         "decoding": engine.decoding_name,

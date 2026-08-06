@@ -27,6 +27,7 @@ class ServerInfo:
     temperature: float
     decoding: str = "unknown"
     attention: str = "unknown"
+    quantization: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ class TinyInferClient:
                 context_length=_optional_int(payload.get("context_length")),
                 device=str(payload.get("device", "unknown")),
                 dtype=str(payload.get("dtype", "unknown")),
+                quantization=str(payload.get("quantization", "unknown")),
                 attention=str(payload.get("attention", "unknown")),
                 kv_cache=str(payload.get("kv_cache", "unknown")),
                 decoding=str(payload.get("decoding", "unknown")),

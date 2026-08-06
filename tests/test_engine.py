@@ -26,6 +26,8 @@ class RecordingModel:
         self.cache_dtypes = []
         self.attention_name = None
         self.weight = torch.nn.Parameter(torch.zeros(1))
+        self._activation_dtype = torch.float32
+        self.quantization_name = "none"
         self.config = SimpleNamespace(
             num_hidden_layers=2,
             num_key_value_heads=1,
@@ -34,12 +36,9 @@ class RecordingModel:
             stop_token_ids=frozenset(),
         )
 
-    def parameters(self):
-        return iter((self.weight,))
-
     @property
     def activation_dtype(self) -> torch.dtype:
-        return self.weight.dtype
+        return self._activation_dtype
 
     def set_attention(self, name: str) -> None:
         self.attention_name = name
@@ -82,12 +81,64 @@ def test_engine_selects_full_prefix_or_incremental_decode(
 
 def test_engine_uses_the_models_dtype_for_cache_storage() -> None:
     model = RecordingModel()
-    model.weight = torch.nn.Parameter(torch.zeros(1, dtype=torch.bfloat16))
+    model._activation_dtype = torch.bfloat16
+    model.weight = torch.nn.Parameter(torch.zeros(1, dtype=torch.int8), requires_grad=False)
+    model.quantization_name = "q8"
     engine = Engine(model, Tokenizer(), torch.device("cpu"), kv_cache_name="contiguous")
 
     list(engine.stream([Message(role="user", content="hello")], max_new_tokens=1))
 
     assert model.cache_dtypes == [torch.bfloat16]
+    assert engine.activation_dtype == torch.bfloat16
+    assert engine.quantization_name == "q8"
+
+
+@pytest.mark.parametrize(
+    ("requested", "artifact"),
+    [("none", "q8"), ("q8", "none"), ("q4", "q8")],
+)
+def test_engine_rejects_explicit_quantization_mismatch_before_loading(
+    tmp_path, monkeypatch, requested: str, artifact: str
+) -> None:
+    if artifact == "q8":
+        from tinyinfer.quantization.format import QuantizationConfig
+
+        QuantizationConfig.q8(
+            source_model="Tiny/Qwen",
+            source_revision="revision-1",
+            tensors=(),
+        ).write(tmp_path)
+    monkeypatch.setattr(
+        "tinyinfer.engine.QwenTokenizer",
+        lambda _: pytest.fail("tokenizer construction proves loading started"),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        Engine.from_pretrained(tmp_path, quantization_name=requested)
+
+
+def test_engine_uses_quantized_artifact_source_identity(tmp_path, monkeypatch) -> None:
+    from tinyinfer.quantization.format import QuantizationConfig
+
+    QuantizationConfig.q8(
+        source_model="Tiny/Qwen",
+        source_revision="revision-1",
+        tensors=(),
+    ).write(tmp_path)
+    model = RecordingModel()
+    model.quantization_name = "q8"
+    monkeypatch.setattr("tinyinfer.engine.QwenTokenizer", lambda _: Tokenizer())
+    monkeypatch.setattr(
+        "tinyinfer.engine.QwenForCausalLM.from_pretrained",
+        lambda *args, **kwargs: model,
+    )
+
+    engine = Engine.from_pretrained(tmp_path)
+
+    assert engine.quantization_name == "q8"
+    assert engine.source_model == "Tiny/Qwen"
+    assert engine.source_revision == "revision-1"
+    assert engine.artifact_path == str(tmp_path.resolve())
 
 
 def test_engine_selects_the_models_attention_implementation() -> None:

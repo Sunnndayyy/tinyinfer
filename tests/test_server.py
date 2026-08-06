@@ -17,12 +17,13 @@ class RecordingEngine:
         self.kv_cache_name = "contiguous"
         self.decoding_name = "autoregressive"
         self.attention_name = "sdpa"
+        self.activation_dtype = torch.bfloat16
+        self.quantization_name = "q8"
         self.model = SimpleNamespace(
             config=SimpleNamespace(
                 num_hidden_layers=2,
                 max_position_embeddings=4096,
             ),
-            parameters=lambda: iter([torch.zeros(1, dtype=torch.float32)]),
         )
 
     def stream(self, messages, *, max_new_tokens):
@@ -114,7 +115,8 @@ def test_health_describes_the_loaded_runtime_and_model() -> None:
         "layers": 2,
         "context_length": 4096,
         "device": "cpu",
-        "dtype": "float32",
+        "dtype": "bfloat16",
+        "quantization": "q8",
         "kv_cache": "contiguous",
         "decoding": "autoregressive",
         "attention": "sdpa",
