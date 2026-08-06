@@ -237,6 +237,7 @@ def test_q8_matrix_dequantize_rejects_malformed_weights(quantized: torch.Tensor)
     with pytest.raises(ValueError):
         dequantize_q8(quantized, torch.zeros((2, 2), dtype=torch.float16))
 
+
 def test_q8_matrix_quantization_is_deterministic() -> None:
     weights = torch.linspace(-7, 11, steps=128).reshape(2, 64)
 
