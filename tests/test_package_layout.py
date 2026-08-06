@@ -22,6 +22,7 @@ ROADMAP_MODULES = (
     "tinyinfer.sampling.top_p",
     "tinyinfer.quantization.int8",
     "tinyinfer.quantization.int4",
+    "tinyinfer.quantization.linear",
     "tinyinfer.parallelism.tensor",
     "tinyinfer.parallelism.pipeline",
 )
