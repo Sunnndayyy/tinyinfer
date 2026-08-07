@@ -1,36 +1,13 @@
 # TinyInfer
 
-TinyInfer is a small, readable LLM inference server.
-It aims for the space between learning basic concepts and a production engine such as vLLM, SGlang etc. 
+A small, readable LLM inference engine and server built from first principles
+It aims to be somewhere in the middle of learning basic concepts and a production engine such as vLLM, SGlang etc. 
 
-The first model target is
-[`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
-on Apple Silicon. TinyInfer downloads Qwen's tokenizer and safetensors.
+The first model target is [`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) on Apple Silicon. 
 
-## overview
+Why? It has a simple model archtecture and is good place to start, the goal is to add more model variety with increasing complexity throughout the course of the project. 
 
-Optimization routes stay explicit so each faster implementation can be checked
-against a readable reference path.
-
-```text
-remote client
-    |
-    | POST /v1/chat/completions
-    v
-server.py       HTTP JSON in, streamed SSE out
-    |
-    v
-engine.py       validate request -> select decoder
-    |
-    v
-decoding/       repeat: model -> choose token -> append -> emit
-    |
-    v
-model.py        tokens -> Qwen decoder layers -> next-token logits
-    |
-    v
-Qwen on Apple MPS
-```
+---
 
 ## Quick start
 
@@ -56,9 +33,7 @@ tinyinfer quantize Qwen/Qwen2.5-1.5B-Instruct \
   --output .tinyinfer/models/qwen2.5-1.5b-q8
 ```
 
-The Q8 directory is self-contained and keeps the tied embedding/output matrix
-once. On Apple Silicon, packed weights and FP16 scales are read directly by a
-fused Metal linear kernel; CPU keeps the deliberately slow reference path.
+Take the model for a spin:
 
 ```bash
 tinyinfer generate .tinyinfer/models/qwen2.5-1.5b-q8 \
@@ -66,17 +41,6 @@ tinyinfer generate .tinyinfer/models/qwen2.5-1.5b-q8 \
   --dtype bfloat16 \
   --prompt "What does weight quantization save?" \
   --max-new-tokens 8
-```
-
-Take the model for a spin:
-
-```bash
-tinyinfer generate Qwen/Qwen2.5-1.5B-Instruct \
-  --prompt "What does a KV cache save?" \
-  --decoding autoregressive \
-  --attention eager \
-  --kv-cache contiguous \
-  --max-new-tokens 24
 ```
 
 Start the server:
@@ -105,17 +69,15 @@ limit with `--system` and `--max-tokens`.
 The displayed TTFT is measured by the client from request dispatch to the first
 streamed token, so it includes network, admission, request parsing, tokenization,
 and prefill. The terminal SSE metadata reports `server_ttft_seconds` separately
-for server-side generation work. It also emits the deprecated
-`time_to_first_token_seconds` alias with the same server-only value for older
-clients; `ChatCompletion.time_to_first_token` remains the matching deprecated
-client accessor.
+for server-side generation work.
 
-TinyInfer currently has no authentication or TLS, so protect the port
-with a firewall and do not expose it directly to the internet.
+TinyInfer currently has no authentication or TLS
 
-## OpenAI-shaped API
+---
 
-V0 implements a deliberately narrow, text-only subset of chat completions:
+## OpenAI compatible API
+
+TinyInfer implements a narrow, text-only subset of chat completions:
 
 ```bash
 curl -N http://127.0.0.1:8000/v1/chat/completions \
@@ -128,9 +90,10 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
   }'
 ```
 
-The route and SSE chunks are OpenAI-shaped; V0 does not claim complete API
-compatibility. One request owns the model at a time and excess work receives
+Currenty one request owns the model at a time and excess work receives
 HTTP 503 rather than running concurrent MPS forwards.
+
+---
 
 ## Benchmarking
 
@@ -158,7 +121,7 @@ baseline. `contiguous` preallocates a request-local cache and is the default.
 eager attention; it teaches paging and is not yet a PagedAttention speedup.
 
 For comparable decode experiments, save one aggregate result per configuration
-to the ignored local cache, then regenerate the tracked leaderboard. Run these
+to the local cache, then regenerate the tracked leaderboard. Run these
 from the repository root, one at a time:
 
 ```bash
@@ -171,27 +134,7 @@ Of the end-to-end benchmark outputs, only `BENCHMARKS.md` belongs in Git.
 TinyInfer does not retain prompts, generated text, or individual runs when
 `--save` is used.
 
-The fused Q8 operator has a separate warmed MPS benchmark for the two Qwen
-decode shapes used as its promotion gate:
-
-```bash
-.venv/bin/python benchmarks/q8_mps_linear.py
-```
-
-See the [M4 Pro Q8 benchmark note](benchmarks/README.md) for the
-retained operator, decode-throughput, and TTFT results. TTFT is reported
-separately because Q8 speeds up steady-state decode while regressing prefill.
-
-## Current limitations
-
-- Qwen2 only; V0 is checked against Qwen2.5-1.5B-Instruct.
-- Greedy decoding only.
-- Batch size one and one in-process model.
-- Request-local contiguous and educational paged KV caches; no shared cache pool.
-- Selectable eager and PyTorch SDPA attention; no FlashAttention-specific route yet.
-- BF16 MPS by default on Apple Silicon; CPU uses float32.
-- Q8 conversion, a readable CPU oracle, and fused MPS execution.
-- No request queue, auth, Linux/CUDA, or distributed execution.
+---
 
 ## Development
 
