@@ -6,6 +6,8 @@ from tinyinfer.kv_cache import KV_CACHE_NAMES
 
 DEFAULT_DECODING = "autoregressive"
 DEFAULT_KV_CACHE = "contiguous"
+DEFAULT_QUANTIZATION = "auto"
+QUANTIZATION_NAMES = ("none", "q8", "q4")
 
 __all__ = [
     "ATTENTION_NAMES",
@@ -13,5 +15,7 @@ __all__ = [
     "DEFAULT_ATTENTION",
     "DEFAULT_DECODING",
     "DEFAULT_KV_CACHE",
+    "DEFAULT_QUANTIZATION",
     "KV_CACHE_NAMES",
+    "QUANTIZATION_NAMES",
 ]

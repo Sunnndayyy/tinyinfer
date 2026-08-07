@@ -42,6 +42,7 @@ def render_banner(info: ServerInfo, *, host: str, max_tokens: int, output: TextI
             "  a tiny inference server and chat client",
             "",
             f"  runtime    v{info.runtime} · {info.device} · {info.dtype}",
+            f"  weights    {info.quantization}",
             f"  model      {info.model}",
             f"  arch       {architecture}",
             f"  attention  {info.attention}",

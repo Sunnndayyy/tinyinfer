@@ -13,7 +13,9 @@ from tinyinfer.runtime import (
     DEFAULT_ATTENTION,
     DEFAULT_DECODING,
     DEFAULT_KV_CACHE,
+    DEFAULT_QUANTIZATION,
     KV_CACHE_NAMES,
+    QUANTIZATION_NAMES,
 )
 
 
@@ -47,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--decoding", choices=DECODING_NAMES, default=DEFAULT_DECODING)
     generate.add_argument("--attention", choices=ATTENTION_NAMES, default=DEFAULT_ATTENTION)
     generate.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
+    generate.add_argument(
+        "--quantization",
+        choices=("auto", *QUANTIZATION_NAMES),
+        default=DEFAULT_QUANTIZATION,
+    )
     generate.add_argument("--cache-dir")
 
     serve = commands.add_parser("serve", help="serve the real model over HTTP")
@@ -60,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--decoding", choices=DECODING_NAMES, default=DEFAULT_DECODING)
     serve.add_argument("--attention", choices=ATTENTION_NAMES, default=DEFAULT_ATTENTION)
     serve.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
+    serve.add_argument(
+        "--quantization",
+        choices=("auto", *QUANTIZATION_NAMES),
+        default=DEFAULT_QUANTIZATION,
+    )
     serve.add_argument("--cache-dir")
     serve.add_argument(
         "--allow-remote",
@@ -87,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--decoding", choices=DECODING_NAMES, default=DEFAULT_DECODING)
     bench.add_argument("--attention", choices=ATTENTION_NAMES, default=DEFAULT_ATTENTION)
     bench.add_argument("--kv-cache", choices=KV_CACHE_NAMES, default=DEFAULT_KV_CACHE)
+    bench.add_argument(
+        "--quantization",
+        choices=("auto", *QUANTIZATION_NAMES),
+        default=DEFAULT_QUANTIZATION,
+    )
     bench.add_argument("--cache-dir")
     bench.add_argument("--json", action="store_true", dest="json_output")
     bench.add_argument("--save", action="store_true")
@@ -129,6 +146,8 @@ def run_generate(args: argparse.Namespace) -> int:
         decoding_name=args.decoding,
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
+        quantization_name=getattr(args, "quantization", DEFAULT_QUANTIZATION),
+        model_name=args.model,
     )
     messages = [
         Message(role="system", content=args.system),
@@ -164,6 +183,8 @@ def run_serve(args: argparse.Namespace) -> int:
         decoding_name=args.decoding,
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
+        quantization_name=getattr(args, "quantization", DEFAULT_QUANTIZATION),
+        model_name=args.model,
     )
     app = create_app(engine, args.model)
     uvicorn.run(app, host=args.host, port=args.port)
@@ -221,6 +242,8 @@ def run_bench(args: argparse.Namespace) -> int:
         decoding_name=args.decoding,
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
+        quantization_name=getattr(args, "quantization", DEFAULT_QUANTIZATION),
+        model_name=args.model,
     )
     messages = [
         Message(role="system", content=options.system),
@@ -233,10 +256,13 @@ def run_bench(args: argparse.Namespace) -> int:
         warmup=options.warmup,
         repetitions=options.repetitions,
         metadata={
-            "model": args.model,
+            "model": engine.source_model,
+            "revision": engine.source_revision,
+            "artifact_path": engine.artifact_path,
             "hardware": hardware_name(),
             "device": str(engine.device),
-            "dtype": str(next(engine.model.parameters()).dtype),
+            "dtype": str(engine.activation_dtype),
+            "quantization": engine.quantization_name,
             "decoding": engine.decoding_name,
             "attention": engine.attention_name,
             "profile": options.profile,
