@@ -1,4 +1,8 @@
-# TinyInfer
+<div align="center">
+
+<img alt="TinyInfer" src="/logo_tinyinfer.svg" width="50%" height="50%">
+
+</div>
 
 A small, readable LLM inference engine and server built from first principles
 It aims to be somewhere in the middle of learning basic concepts and a production engine such as vLLM, SGlang etc. 
