@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -9,6 +8,18 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 from torch import Tensor, nn
 
+from tinyinfer.architecture import (
+    Architecture,
+    DenseSwiGLUSpec,
+    LayerSpec,
+    ModelSpec,
+    NormMode,
+    NormSpec,
+    OutputSpec,
+    ScalarRoPESpec,
+    SoftmaxAttentionSpec,
+    load_model_spec,
+)
 from tinyinfer.artifacts import weight_shards
 from tinyinfer.attention import (
     DEFAULT_ATTENTION,
@@ -52,30 +63,112 @@ class QwenConfig:
     def stop_token_ids(self) -> frozenset[int]:
         return frozenset((self.eos_token_id, *self.additional_eos_token_ids))
 
+    def to_model_spec(self) -> ModelSpec:
+        norm = NormSpec(NormMode.DIRECT, self.rms_norm_eps)
+        attention = SoftmaxAttentionSpec(
+            query_heads=self.num_attention_heads,
+            key_value_heads=self.num_key_value_heads,
+            head_dim=self.head_dim,
+            qkv_bias=True,
+            qk_norm=None,
+            output_gate=False,
+        )
+        layer = LayerSpec(
+            input_norm=norm,
+            post_attention_norm=norm,
+            token_mixer=attention,
+            channel_mixer=DenseSwiGLUSpec(self.intermediate_size),
+        )
+        return ModelSpec(
+            architecture=Architecture.QWEN2,
+            vocab_size=self.vocab_size,
+            hidden_size=self.hidden_size,
+            max_position_embeddings=self.max_position_embeddings,
+            layers=(layer,) * self.num_hidden_layers,
+            final_norm=norm,
+            position=ScalarRoPESpec(self.rope_theta),
+            output=OutputSpec(self.tie_word_embeddings),
+            bos_token_id=self.bos_token_id,
+            eos_token_id=self.eos_token_id,
+            pad_token_id=self.pad_token_id,
+            additional_eos_token_ids=self.additional_eos_token_ids,
+        )
+
+    @classmethod
+    def from_model_spec(cls, spec: ModelSpec) -> QwenConfig:
+        if spec.final_norm.mode is not NormMode.DIRECT or any(
+            layer.input_norm.mode is not NormMode.DIRECT
+            or layer.post_attention_norm.mode is not NormMode.DIRECT
+            for layer in spec.layers
+        ):
+            raise NotImplementedError("model construction does not yet support unit-offset RMSNorm")
+        if any(
+            layer.input_norm != spec.final_norm or layer.post_attention_norm != spec.final_norm
+            for layer in spec.layers
+        ):
+            raise ValueError("descriptor normalization must be uniform for Qwen2 construction")
+        if not isinstance(spec.position, ScalarRoPESpec) or spec.position.rotary_fraction != 1.0:
+            raise NotImplementedError(
+                "model construction does not yet support partial or multiaxis RoPE"
+            )
+        attentions: list[SoftmaxAttentionSpec] = []
+        channels: list[DenseSwiGLUSpec] = []
+        for layer in spec.layers:
+            if not isinstance(layer.token_mixer, SoftmaxAttentionSpec):
+                raise NotImplementedError("model construction does not yet support Gated DeltaNet")
+            if layer.token_mixer.qk_norm is not None:
+                raise NotImplementedError(
+                    "model construction does not yet support attention Q/K normalization"
+                )
+            if not layer.token_mixer.qkv_bias:
+                raise NotImplementedError(
+                    "model construction does not yet support bias-free Q/K/V projections"
+                )
+            if layer.token_mixer.output_gate:
+                raise NotImplementedError(
+                    "model construction does not yet support gated attention output"
+                )
+            attentions.append(layer.token_mixer)
+            channels.append(layer.channel_mixer)
+
+        if not attentions:
+            raise ValueError("descriptor must contain at least one layer")
+        if not spec.output.tie_embeddings:
+            raise NotImplementedError(
+                "model construction does not yet support an untied output projection"
+            )
+        attention = attentions[0]
+        channel = channels[0]
+        if any(item != attention for item in attentions) or any(
+            item != channel for item in channels
+        ):
+            raise NotImplementedError(
+                "model construction does not yet support heterogeneous dense layers"
+            )
+        if spec.hidden_size != attention.query_heads * attention.head_dim:
+            raise ValueError("descriptor hidden size does not match its attention dimensions")
+        if spec.bos_token_id is None:
+            raise ValueError("descriptor must provide bos_token_id for Qwen2 construction")
+        return cls(
+            vocab_size=spec.vocab_size,
+            hidden_size=spec.hidden_size,
+            intermediate_size=channel.intermediate_size,
+            num_hidden_layers=spec.num_hidden_layers,
+            num_attention_heads=attention.query_heads,
+            num_key_value_heads=attention.key_value_heads,
+            max_position_embeddings=spec.max_position_embeddings,
+            rms_norm_eps=spec.final_norm.eps,
+            rope_theta=spec.position.theta,
+            bos_token_id=spec.bos_token_id,
+            eos_token_id=spec.eos_token_id,
+            pad_token_id=spec.pad_token_id,
+            tie_word_embeddings=spec.output.tie_embeddings,
+            additional_eos_token_ids=spec.additional_eos_token_ids,
+        )
+
     @classmethod
     def from_directory(cls, model_dir: str | Path) -> QwenConfig:
-        values = json.loads((Path(model_dir) / "config.json").read_text())
-        architectures = values.get("architectures", [])
-        if values.get("model_type") != "qwen2" or "Qwen2ForCausalLM" not in architectures:
-            raise ValueError(
-                "TinyInfer V0 supports Qwen2ForCausalLM checkpoints only; "
-                f"received model_type={values.get('model_type')!r}, architectures={architectures!r}"
-            )
-        if not values.get("tie_word_embeddings", False):
-            raise ValueError("TinyInfer V0 expects Qwen's tied input and output embeddings")
-
-        config_values = {
-            field.name: values[field.name] for field in fields(cls) if field.name in values
-        }
-        generation_path = Path(model_dir) / "generation_config.json"
-        if generation_path.is_file():
-            generation_values = json.loads(generation_path.read_text())
-            generation_eos = generation_values.get("eos_token_id", [])
-            if isinstance(generation_eos, list):
-                config_values["additional_eos_token_ids"] = tuple(
-                    token_id for token_id in generation_eos if token_id != values["eos_token_id"]
-                )
-        return cls(**config_values)
+        return cls.from_model_spec(load_model_spec(model_dir))
 
 
 class RMSNorm(nn.Module):
@@ -307,6 +400,7 @@ class QwenForCausalLM(nn.Module):
     def __init__(self, config: QwenConfig, *, attention_name: AttentionName = DEFAULT_ATTENTION):
         super().__init__()
         self.config = config
+        self.spec = config.to_model_spec()
         self.model = QwenModel(config, attention_name=attention_name)
 
     @property
