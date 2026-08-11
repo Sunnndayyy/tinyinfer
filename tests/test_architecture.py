@@ -4,6 +4,7 @@ from enum import Enum
 
 import pytest
 import torch
+from safetensors.torch import save_file
 from torch import nn
 
 from tinyinfer.architecture import (
@@ -17,7 +18,7 @@ from tinyinfer.architecture import (
     SoftmaxAttentionSpec,
     load_model_spec,
 )
-from tinyinfer.model import QwenConfig, QwenForCausalLM
+from tinyinfer.model import Attention, QwenConfig, QwenForCausalLM, RMSNorm
 
 
 def qwen2_values() -> dict:
@@ -371,12 +372,69 @@ def test_qwen2_descriptor_preserves_existing_model_construction(tmp_path) -> Non
         torch.testing.assert_close(direct(input_ids), descriptor_backed(input_ids))
 
 
-def test_recognized_but_unimplemented_dense_operator_fails_by_capability(tmp_path) -> None:
-    write_config(tmp_path, qwen3_values())
-    spec = load_model_spec(tmp_path)
+def test_tied_qwen3_descriptor_builds_its_dense_runtime(tmp_path) -> None:
+    values = qwen3_values()
+    values["tie_word_embeddings"] = True
+    write_config(tmp_path, values)
 
-    with pytest.raises(NotImplementedError, match="Q/K normalization"):
-        QwenConfig.from_model_spec(spec)
+    config = QwenConfig.from_directory(tmp_path)
+    model = QwenForCausalLM(config).eval()
+    attention = model.model.layers[0].self_attn
+
+    assert config.architecture is Architecture.QWEN3
+    assert config.head_dim == 8
+    assert isinstance(attention, Attention)
+    assert attention.q_proj.bias is None
+    assert attention.k_proj.bias is None
+    assert attention.v_proj.bias is None
+    assert isinstance(attention.q_norm, RMSNorm)
+    assert isinstance(attention.k_norm, RMSNorm)
+    assert attention.q_norm.weight.shape == (8,)
+    assert attention.k_norm.weight.shape == (8,)
+    assert model(torch.tensor([[1, 5, 7]])).shape == (1, 3, 48)
+
+
+def test_tied_qwen3_checkpoint_loader_restores_qk_norm_weights(tmp_path) -> None:
+    values = qwen3_values()
+    values["tie_word_embeddings"] = True
+    write_config(tmp_path, values)
+    source = QwenForCausalLM(QwenConfig.from_directory(tmp_path)).eval()
+    tensors = {name: value.detach().clone() for name, value in source.state_dict().items()}
+    tensors["lm_head.weight"] = tensors["model.embed_tokens.weight"].clone()
+    save_file(tensors, tmp_path / "model.safetensors")
+
+    loaded = QwenForCausalLM.from_pretrained(
+        tmp_path,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    assert loaded.training is False
+    loaded_state = loaded.state_dict()
+    for name, expected in source.state_dict().items():
+        torch.testing.assert_close(loaded_state[name], expected)
+
+
+def test_qwen3_construction_rejects_unit_offset_qk_norm(tmp_path) -> None:
+    values = qwen3_values()
+    values["tie_word_embeddings"] = True
+    write_config(tmp_path, values)
+    spec = load_model_spec(tmp_path)
+    attention = replace(
+        spec.layers[0].token_mixer,
+        qk_norm=NormSpec(NormMode.UNIT_OFFSET, 1e-6),
+    )
+    layer = replace(spec.layers[0], token_mixer=attention)
+
+    with pytest.raises(NotImplementedError, match="unit-offset attention Q/K RMSNorm"):
+        QwenConfig.from_model_spec(replace(spec, layers=(layer, *spec.layers[1:])))
+
+
+def test_qwen3_construction_rejects_untied_output(tmp_path) -> None:
+    write_config(tmp_path, qwen3_values())
+
+    with pytest.raises(NotImplementedError, match="untied output projection"):
+        QwenConfig.from_directory(tmp_path)
 
 
 def test_qwen3_5_construction_fails_at_its_first_unimplemented_capability(tmp_path) -> None:

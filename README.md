@@ -58,6 +58,16 @@ tinyinfer serve Qwen/Qwen2.5-1.5B-Instruct \
   --port 8000
 ```
 
+Qwen3-0.6B uses the same server interface:
+
+```bash
+tinyinfer serve Qwen/Qwen3-0.6B \
+  --device mps \
+  --dtype bfloat16 \
+  --attention sdpa \
+  --kv-cache contiguous
+```
+
 Then open the interactive HTTP client from a second terminal:
 
 ```bash
