@@ -138,6 +138,17 @@ Of the end-to-end benchmark outputs, only `BENCHMARKS.md` belongs in Git.
 TinyInfer does not retain prompts, generated text, or individual runs when
 `--save` is used.
 
+Run the focused Q8/BF16 Roofline experiment with:
+
+```bash
+tinyinfer benchmark --roofline
+tinyinfer benchmark --roofline --capture
+tinyinfer benchmark --roofline --clean
+```
+
+Generated graphs, results, and traces stay in the ignored
+`.tinyinfer/roofline/` directory.
+
 ---
 
 ## Development

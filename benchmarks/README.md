@@ -49,17 +49,18 @@ It does not identify the exact hardware limit in the kernel.
 
 ## Focused Roofline and Metal capture
 
-Use the focused experiment to generate JSON, an SVG Roofline plot, and four
-direct Xcode GPU captures for the 1536 to 8960 projection:
+Use the focused experiment for the 1536 to 8960 projection:
 
 ```bash
-.venv/bin/python benchmarks/q8_mps_roofline.py \
-  --json /tmp/tinyinfer-roofline.json \
-  --plot /tmp/tinyinfer-roofline.svg
-
-MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_roofline.py \
-  --metal-capture-dir /tmp/tinyinfer-metal-captures
+tinyinfer benchmark --roofline
+tinyinfer benchmark --roofline --capture
+tinyinfer benchmark --roofline --clean
 ```
+
+The first command writes `results.json` and `roofline.svg` to
+`.tinyinfer/roofline/`. The capture command writes four direct Xcode GPU
+captures to `.tinyinfer/roofline/captures/`. The clean command removes only the
+Roofline directory. The repository ignores `.tinyinfer/`.
 
 See [the focused Roofline evidence](q8_mps_roofline.md) for the counter input,
 measured results, and proof limits. Capture replay time is not benchmark time.

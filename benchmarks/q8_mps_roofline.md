@@ -6,9 +6,14 @@ decode row with 256 prefill rows. It tests PyTorch BF16 and TinyInfer Q8.
 ## Run the benchmark
 
 ```bash
-.venv/bin/python benchmarks/q8_mps_roofline.py \
-  --json /tmp/tinyinfer-roofline.json \
-  --plot /tmp/tinyinfer-roofline.svg
+tinyinfer benchmark --roofline
+```
+
+The command writes `.tinyinfer/roofline/results.json` and
+`.tinyinfer/roofline/roofline.svg`. Open the graph with:
+
+```bash
+open .tinyinfer/roofline/roofline.svg
 ```
 
 The program does these steps:
@@ -51,9 +56,7 @@ sustainable ceiling.
 ## Capture the four operations
 
 ```bash
-MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_roofline.py \
-  --warmup 10 \
-  --metal-capture-dir /tmp/tinyinfer-metal-captures
+tinyinfer benchmark --roofline --capture
 ```
 
 The command writes these packages:
@@ -63,9 +66,9 @@ The command writes these packages:
 - `bf16-r256.gputrace`
 - `q8-r256.gputrace`
 
-The numeric prefix can change. Each package contains one operation. Open a
-package in Xcode. Use Shaders, Heat Map, and Counters. Do not use capture replay
-time as benchmark time.
+The files are in `.tinyinfer/roofline/captures/`. The numeric prefix can change.
+Each package contains one operation. Open a package in Xcode. Use Shaders, Heat
+Map, and Counters. Do not use capture replay time as benchmark time.
 
 PyTorch implements direct capture with
 [`torch.mps.profiler.metal_capture`](https://docs.pytorch.org/docs/stable/generated/torch.mps.profiler.metal_capture.html).
@@ -106,7 +109,8 @@ does prove the limit for these four operations on this M4 Pro.
 
 ## Add device traffic to the graph
 
-Copy the Device Read and Device Write byte values from Xcode into a JSON file:
+Copy the Device Read and Device Write byte values from Xcode into
+`.tinyinfer/roofline/counters.json`:
 
 ```json
 {
@@ -131,12 +135,8 @@ The numbers above are rounded conversions from the displayed MiB and KiB
 values. For exact graph points, replace them with Xcode's byte values.
 The command rejects the file if its matrix shape does not match the benchmark.
 
-```bash
-.venv/bin/python benchmarks/q8_mps_roofline.py \
-  --counters /tmp/tinyinfer-counters.json \
-  --json /tmp/tinyinfer-roofline.json \
-  --plot /tmp/tinyinfer-roofline.svg
-```
+Run `tinyinfer benchmark --roofline` again. The graph automatically uses the
+counter file when it exists.
 
 The graph uses two symbols:
 
@@ -152,3 +152,11 @@ Python test. Apple requires applications to test each device's available
 [counter sets](https://developer.apple.com/documentation/metal/confirming-which-counters-and-counter-sets-a-gpu-supports).
 For this small tool, Xcode is the source for these counters. The tool does not
 try to parse the private `.gputrace` package format.
+
+Remove all generated Roofline files with:
+
+```bash
+tinyinfer benchmark --roofline --clean
+```
+
+This removes only `.tinyinfer/roofline/`. The repository ignores `.tinyinfer/`.

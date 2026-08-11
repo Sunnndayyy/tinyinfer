@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import statistics
-import time
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from tinyinfer.benchmark import hardware_name
+from tinyinfer.benchmark import hardware_name, measure_mps_pair
 from tinyinfer.quantization.int8 import GROUP_SIZE
 from tinyinfer.quantization.metal import _q8_linear_mps, require_q8_mps
 
@@ -38,34 +35,6 @@ SHAPES = (
 )
 
 
-def sample_order(sample_index: int) -> tuple[str, str]:
-    return ("q8", "bf16") if sample_index % 2 == 0 else ("bf16", "q8")
-
-
-def measure_pair(
-    q8_operation: Callable[[], Tensor],
-    bf16_operation: Callable[[], Tensor],
-    *,
-    warmup: int,
-    repetitions: int,
-) -> tuple[float, float]:
-    operations = {"q8": q8_operation, "bf16": bf16_operation}
-    for sample_index in range(warmup):
-        for name in sample_order(sample_index):
-            operations[name]()
-
-    # Finish shader compilation and lazy MPS work before timing synchronized samples.
-    torch.mps.synchronize()
-    samples = {"q8": [], "bf16": []}
-    for sample_index in range(repetitions):
-        for name in sample_order(sample_index):
-            started = time.perf_counter()
-            operations[name]()
-            torch.mps.synchronize()
-            samples[name].append((time.perf_counter() - started) * 1000)
-    return statistics.median(samples["q8"]), statistics.median(samples["bf16"])
-
-
 def benchmark_shape(
     rows: int,
     q8_weights: Tensor,
@@ -78,7 +47,7 @@ def benchmark_shape(
     input_width = q8_weights.shape[1]
     inputs = torch.randn((rows, input_width), dtype=torch.bfloat16, device="mps")
 
-    return measure_pair(
+    return measure_mps_pair(
         lambda: _q8_linear_mps(inputs, q8_weights, scales),
         lambda: F.linear(inputs, bf16_weights),
         warmup=warmup,

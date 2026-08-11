@@ -5,12 +5,14 @@ import platform
 import statistics
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import torch
+from torch import Tensor
 
 from tinyinfer.engine import Engine
 from tinyinfer.runtime import KV_CACHE_NAMES
@@ -71,6 +73,34 @@ PROFILES = {
         profile="decode",
     )
 }
+
+
+def _sample_order(sample_index: int) -> tuple[str, str]:
+    return ("q8", "bf16") if sample_index % 2 == 0 else ("bf16", "q8")
+
+
+def measure_mps_pair(
+    q8_operation: Callable[[], Tensor],
+    bf16_operation: Callable[[], Tensor],
+    *,
+    warmup: int,
+    repetitions: int,
+) -> tuple[float, float]:
+    """Measure two MPS operations with alternating synchronized samples."""
+    operations = {"q8": q8_operation, "bf16": bf16_operation}
+    for sample_index in range(warmup):
+        for name in _sample_order(sample_index):
+            operations[name]()
+
+    torch.mps.synchronize()
+    samples = {"q8": [], "bf16": []}
+    for sample_index in range(repetitions):
+        for name in _sample_order(sample_index):
+            started = time.perf_counter()
+            operations[name]()
+            torch.mps.synchronize()
+            samples[name].append((time.perf_counter() - started) * 1000)
+    return statistics.median(samples["q8"]), statistics.median(samples["bf16"])
 
 
 def percentile(values: list[float], percent: float) -> float:
