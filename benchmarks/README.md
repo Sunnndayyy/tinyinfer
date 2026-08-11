@@ -2,8 +2,8 @@
 
 These measurements compare TinyInfer's fused Q8 Metal path with PyTorch BF16
 on the same Apple M4 Pro using PyTorch 2.13.0. Both sweeps warm the paths,
-synchronize every timed MPS sample, report medians, and alternate whether BF16
-or Q8 runs first.
+synchronize every timed MPS sample, report medians, and alternate which path
+runs first.
 
 ## Operator row sweep
 
@@ -14,7 +14,7 @@ Run every distinct Qwen2.5-1.5B linear shape:
   --warmup 10 --repetitions 20 --seed 0
 ```
 
-The tied vocabulary projection is intentionally measured only at one row:
+The tied vocabulary projection is intentionally measured only at one row.
 TinyInfer's `next_token_logits` projects the final hidden state, not every
 prompt row.
 
@@ -44,8 +44,26 @@ prompt row.
 
 The large MLP projections win with Q8 at one row and lose by eight rows. The
 attention projections are already roughly tied or slower at one row. This is
-operator evidence for a decode-oriented crossover between one and eight rows;
-it does not identify the kernel's exact hardware bottleneck.
+operator evidence for a decode-oriented crossover between one and eight rows.
+It does not identify the exact hardware limit in the kernel.
+
+## Focused Roofline and Metal capture
+
+Use the focused experiment for the 1536 to 8960 projection:
+
+```bash
+tinyinfer benchmark --roofline
+tinyinfer benchmark --roofline --capture
+tinyinfer benchmark --roofline --clean
+```
+
+The first command writes `results.json` and `roofline.svg` to
+`.tinyinfer/roofline/`. The capture command writes four direct Xcode GPU
+captures to `.tinyinfer/roofline/captures/`. The clean command removes only the
+Roofline directory. The repository ignores `.tinyinfer/`.
+
+See [the focused Roofline evidence](q8_mps_roofline.md) for the counter input,
+measured results, and proof limits. Capture replay time is not benchmark time.
 
 ## Exact-token real-model sweep
 
@@ -61,9 +79,9 @@ Run matched BF16 and Q8 checkpoints with SDPA and a contiguous cache:
 
 The script constructs exact token-ID sequences, so its TTFT starts from token
 IDs and excludes tokenizer time. `First forward` isolates the synchronized
-prompt forward with a fresh cache; TTFT additionally includes generation setup,
-argmax, and decoding the first token. A run fails if either format stops before
-the requested output length, because unequal decode spans are not comparable.
+prompt forward with a fresh cache. TTFT also includes generation setup, argmax,
+and decoding the first token. A run fails if either format stops before the
+requested output length because unequal decode spans are not comparable.
 
 | Input tokens | BF16 first forward | Q8 first forward | BF16 TTFT | Q8 TTFT | BF16 decode | Q8 decode | Q8 / BF16 decode |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -76,12 +94,13 @@ the requested output length, because unequal decode spans are not comparable.
 The matched end-to-end crossover is also between one and eight input tokens.
 The existing `decode` leaderboard prompt is exactly 28 chat-formatted tokens,
 so the 32-token result closely reproduces its TTFT split: about 40 ms for BF16
-and 112 ms for Q8 here, versus 40 ms and 103 ms in `BENCHMARKS.md`. First-forward
-time accounts for essentially all of the Q8 gap, which places the regression in
-prompt model execution rather than tokenization or first-token text handling.
+and 112 ms for Q8 here, versus 40 ms and 103 ms in `BENCHMARKS.md`.
+First-forward time accounts for almost all of the Q8 gap. This places the
+regression in prompt model execution, not tokenization or first-token text
+handling.
 
 Q8 remains faster for steady one-token decode at every measured prompt length,
 although the advantage narrows as the cached context grows. These results prove
 the crossover only for this model, implementation, software version, and M4 Pro.
-They do not yet prove whether dispatch, occupancy, memory access, or arithmetic
-is the limiting mechanism inside the Metal kernel.
+They do not prove whether dispatch, occupancy, memory access, or arithmetic is
+the limiting mechanism inside the Metal kernel.

@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from argparse import Namespace
 from types import SimpleNamespace
 
@@ -73,6 +75,124 @@ def test_benchmark_can_save_a_named_profile() -> None:
 
     assert args.profile == "decode"
     assert args.save is True
+
+
+def test_benchmark_alias_exposes_the_opinionated_roofline_command() -> None:
+    args = build_parser().parse_args(["benchmark", "--roofline", "--capture"])
+
+    assert args.command == "benchmark"
+    assert args.roofline is True
+    assert args.capture is True
+
+
+def test_benchmark_alias_dispatches_the_roofline_command(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "tinyinfer.roofline.run_default",
+        lambda *, capture: calls.append(capture) or 0,
+    )
+
+    assert cli.main(["benchmark", "--roofline"]) == 0
+    assert calls == [False]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ["model-id"],
+        ["--warmup", "1"],
+        ["--device", "cpu"],
+        ["--json"],
+        ["--save"],
+    ),
+)
+def test_roofline_rejects_model_benchmark_options(arguments, capsys) -> None:
+    args = build_parser().parse_args(["benchmark", *arguments, "--roofline"])
+
+    assert run_bench(args) == 2
+    assert "--roofline cannot use model benchmark options" in capsys.readouterr().err
+
+
+def test_module_invocation_propagates_cli_failure_status() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tinyinfer", "benchmark", "--capture"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stderr == "--capture and --clean require --roofline\n"
+
+
+def test_roofline_command_runs_the_default_experiment(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "tinyinfer.roofline.run_default",
+        lambda *, capture: calls.append(capture) or 0,
+    )
+
+    args = build_parser().parse_args(["benchmark", "--roofline"])
+
+    assert run_bench(args) == 0
+    assert calls == [False]
+
+
+def test_roofline_cleanup_removes_only_its_artifact_directory(tmp_path, monkeypatch) -> None:
+    roofline_dir = tmp_path / ".tinyinfer" / "roofline"
+    roofline_dir.mkdir(parents=True)
+    (roofline_dir / "results.json").write_text("result")
+    sibling = tmp_path / ".tinyinfer" / "benchmarks.json"
+    sibling.write_text("benchmark")
+    monkeypatch.chdir(tmp_path)
+
+    args = build_parser().parse_args(["benchmark", "--roofline", "--clean"])
+
+    assert run_bench(args) == 0
+    assert not roofline_dir.exists()
+    assert sibling.read_text() == "benchmark"
+
+
+def test_roofline_capture_restarts_with_metal_capture_enabled(tmp_path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MTL_CAPTURE_ENABLED", raising=False)
+    monkeypatch.setattr(
+        "tinyinfer.cli.subprocess.run",
+        lambda command, **options: (
+            calls.append((command, options)) or SimpleNamespace(returncode=0)
+        ),
+    )
+
+    args = build_parser().parse_args(["benchmark", "--roofline", "--capture"])
+
+    assert run_bench(args) == 0
+    command, options = calls[0]
+    assert command[-3:] == ["benchmark", "--roofline", "--capture"]
+    assert options["env"]["MTL_CAPTURE_ENABLED"] == "1"
+
+
+def test_roofline_capture_uses_the_fixed_capture_directory(tmp_path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MTL_CAPTURE_ENABLED", "1")
+    monkeypatch.setattr(
+        "tinyinfer.roofline.run_default",
+        lambda *, capture: calls.append(capture) or 0,
+    )
+
+    args = build_parser().parse_args(["benchmark", "--roofline", "--capture"])
+
+    assert run_bench(args) == 0
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("option", ["--capture", "--clean"])
+def test_roofline_actions_require_roofline_mode(option, capsys) -> None:
+    args = build_parser().parse_args(["benchmark", option])
+
+    assert run_bench(args) == 2
+    assert capsys.readouterr().err == "--capture and --clean require --roofline\n"
 
 
 @pytest.mark.parametrize(

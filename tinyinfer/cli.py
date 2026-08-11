@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 from collections.abc import Sequence
 
@@ -16,6 +18,25 @@ from tinyinfer.runtime import (
     DEFAULT_QUANTIZATION,
     KV_CACHE_NAMES,
     QUANTIZATION_NAMES,
+)
+
+ROOFLINE_OPTION_DEFAULTS = (
+    ("model", "model", DEFAULT_MODEL),
+    ("profile", "--profile", None),
+    ("prompt", "--prompt", None),
+    ("system", "--system", None),
+    ("max_new_tokens", "--max-new-tokens", None),
+    ("warmup", "--warmup", None),
+    ("repetitions", "--repetitions", None),
+    ("device", "--device", "auto"),
+    ("dtype", "--dtype", "auto"),
+    ("decoding", "--decoding", DEFAULT_DECODING),
+    ("attention", "--attention", DEFAULT_ATTENTION),
+    ("kv_cache", "--kv-cache", DEFAULT_KV_CACHE),
+    ("quantization", "--quantization", DEFAULT_QUANTIZATION),
+    ("cache_dir", "--cache-dir", None),
+    ("json_output", "--json", False),
+    ("save", "--save", False),
 )
 
 
@@ -84,7 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--system", default="You are a helpful assistant.")
     chat.add_argument("--max-tokens", type=int, default=128)
 
-    bench = commands.add_parser("bench", help="benchmark local generation")
+    bench = commands.add_parser(
+        "bench",
+        aliases=("benchmark",),
+        help="benchmark local generation and kernels",
+    )
     bench.add_argument("model", nargs="?", default=DEFAULT_MODEL)
     bench.add_argument("--profile")
     bench.add_argument("--prompt")
@@ -107,6 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--cache-dir")
     bench.add_argument("--json", action="store_true", dest="json_output")
     bench.add_argument("--save", action="store_true")
+    bench.add_argument("--roofline", action="store_true", help="run the Q8/BF16 Roofline test")
+    roofline_action = bench.add_mutually_exclusive_group()
+    roofline_action.add_argument("--capture", action="store_true", help="capture four GPU traces")
+    roofline_action.add_argument("--clean", action="store_true", help="remove Roofline artifacts")
 
     commands.add_parser("leaderboard", help="regenerate BENCHMARKS.md from local results")
     return parser
@@ -206,6 +235,25 @@ def run_chat(args: argparse.Namespace) -> int:
 
 
 def run_bench(args: argparse.Namespace) -> int:
+    if (getattr(args, "capture", False) or getattr(args, "clean", False)) and not getattr(
+        args, "roofline", False
+    ):
+        print("--capture and --clean require --roofline", file=sys.stderr)
+        return 2
+    if getattr(args, "roofline", False):
+        conflicts = [
+            option
+            for name, option, default in ROOFLINE_OPTION_DEFAULTS
+            if getattr(args, name) != default
+        ]
+        if conflicts:
+            print(
+                f"--roofline cannot use model benchmark options: {', '.join(conflicts)}",
+                file=sys.stderr,
+            )
+            return 2
+        return run_roofline(args)
+
     from tinyinfer.benchmark import (
         benchmark,
         benchmark_options,
@@ -285,6 +333,26 @@ def run_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_roofline(args: argparse.Namespace) -> int:
+    from tinyinfer import roofline
+
+    if args.clean:
+        roofline.clean_artifacts()
+        print(f"removed {roofline.ARTIFACT_DIR}")
+        return 0
+
+    if args.capture and os.environ.get("MTL_CAPTURE_ENABLED") != "1":
+        environment = {**os.environ, "MTL_CAPTURE_ENABLED": "1"}
+        result = subprocess.run(
+            [sys.executable, "-m", "tinyinfer", "benchmark", "--roofline", "--capture"],
+            env=environment,
+            check=False,
+        )
+        return result.returncode
+
+    return roofline.run_default(capture=args.capture)
+
+
 def run_leaderboard() -> int:
     from tinyinfer.benchmark import write_leaderboard
 
@@ -312,7 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_serve(args)
     if args.command == "chat":
         return run_chat(args)
-    if args.command == "bench":
+    if args.command in {"bench", "benchmark"}:
         return run_bench(args)
     if args.command == "leaderboard":
         return run_leaderboard()
