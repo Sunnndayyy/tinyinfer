@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from tinyinfer.architecture import Architecture
 from tinyinfer.engine import Engine
 from tinyinfer.tokenizer import Message
 
@@ -13,7 +14,11 @@ class Decoder:
 
 
 class Tokenizer:
-    def encode_chat(self, messages) -> list[int]:
+    def __init__(self) -> None:
+        self.thinking = []
+
+    def encode_chat(self, messages, *, thinking=True) -> list[int]:
+        self.thinking.append(thinking)
         return [1, 2, 3]
 
     def incremental_decoder(self) -> Decoder:
@@ -29,6 +34,7 @@ class RecordingModel:
         self._activation_dtype = torch.float32
         self.quantization_name = "none"
         self.config = SimpleNamespace(
+            architecture=Architecture.QWEN2,
             num_hidden_layers=2,
             num_key_value_heads=1,
             head_dim=2,
@@ -91,6 +97,23 @@ def test_engine_uses_the_models_dtype_for_cache_storage() -> None:
     assert model.cache_dtypes == [torch.bfloat16]
     assert engine.activation_dtype == torch.bfloat16
     assert engine.quantization_name == "q8"
+
+
+def test_engine_disables_thinking_in_the_qwen3_prompt() -> None:
+    model = RecordingModel()
+    model.config.architecture = Architecture.QWEN3
+    tokenizer = Tokenizer()
+    engine = Engine(model, tokenizer, torch.device("cpu"), thinking=False)
+
+    list(engine.stream([Message(role="user", content="hello")], max_new_tokens=1))
+
+    assert tokenizer.thinking == [False]
+    assert engine.thinking is False
+
+
+def test_engine_rejects_disabling_thinking_for_qwen2() -> None:
+    with pytest.raises(ValueError, match="Qwen3"):
+        Engine(RecordingModel(), Tokenizer(), torch.device("cpu"), thinking=False)
 
 
 @pytest.mark.parametrize(

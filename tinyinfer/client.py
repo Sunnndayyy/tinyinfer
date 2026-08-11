@@ -28,6 +28,7 @@ class ServerInfo:
     decoding: str = "unknown"
     attention: str = "unknown"
     quantization: str = "unknown"
+    thinking: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class TinyInferClient:
                 decoding=str(payload.get("decoding", "unknown")),
                 sampling_strategy=str(payload["sampling"]["strategy"]),
                 temperature=float(payload["sampling"]["temperature"]),
+                thinking=_optional_bool(payload.get("thinking")),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ClientError("the TinyInfer health response is missing model metadata") from error
@@ -184,3 +186,11 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise TypeError("expected a boolean")
+    return value

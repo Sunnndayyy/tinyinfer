@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 
+from tinyinfer.architecture import Architecture
 from tinyinfer.attention import AttentionName, validate_attention_name
 from tinyinfer.decoding import Decoder, FinishReason, TokenEvent, create_decoder
 from tinyinfer.model import QwenForCausalLM
@@ -60,6 +61,7 @@ class Engine:
         attention_name: str = DEFAULT_ATTENTION,
         kv_cache_name: str = DEFAULT_KV_CACHE,
         kv_cache_block_size: int = 16,
+        thinking: bool = True,
         source_model: str | None = None,
         source_revision: str | None = None,
         artifact_path: str | None = None,
@@ -70,6 +72,8 @@ class Engine:
             raise ValueError(f"unknown KV cache {kv_cache_name!r}; expected one of: {choices}")
         if kv_cache_block_size < 1:
             raise ValueError("kv_cache_block_size must be at least 1")
+        if not thinking and model.config.architecture is not Architecture.QWEN3:
+            raise ValueError("disabling thinking is only supported for Qwen3 models")
         self.model = model
         if self.model.attention_name != selected_attention:
             self.model.set_attention(selected_attention)
@@ -77,6 +81,7 @@ class Engine:
         self.device = device
         self.kv_cache_name = kv_cache_name
         self.kv_cache_block_size = kv_cache_block_size
+        self.thinking = thinking
         self.source_model = source_model
         self.source_revision = source_revision
         self.artifact_path = artifact_path
@@ -117,6 +122,7 @@ class Engine:
         attention_name: str = DEFAULT_ATTENTION,
         kv_cache_name: str = DEFAULT_KV_CACHE,
         quantization_name: str = DEFAULT_QUANTIZATION,
+        thinking: bool = True,
         model_name: str | None = None,
     ) -> Engine:
         model_path = Path(model_dir).resolve()
@@ -154,6 +160,7 @@ class Engine:
             decoding_name=decoding_name,
             attention_name=attention_name,
             kv_cache_name=kv_cache_name,
+            thinking=thinking,
             source_model=source_model,
             source_revision=source_revision,
             artifact_path=str(model_path),
@@ -163,7 +170,7 @@ class Engine:
         """Validate eagerly, then return the lazy token iterator."""
         if max_new_tokens < 1:
             raise ValueError("max_new_tokens must be at least 1")
-        prompt_ids = self.tokenizer.encode_chat(messages)
+        prompt_ids = self.tokenizer.encode_chat(messages, thinking=self.thinking)
         if len(prompt_ids) + max_new_tokens - 1 > self.model.config.max_position_embeddings:
             raise ValueError(
                 "prompt plus requested output exceeds the model's maximum sequence length"

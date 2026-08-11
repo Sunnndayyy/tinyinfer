@@ -20,6 +20,7 @@ HEALTH_PAYLOAD = {
     "kv_cache": "contiguous",
     "decoding": "autoregressive",
     "attention": "sdpa",
+    "thinking": False,
     "sampling": {"strategy": "greedy", "temperature": 0.0},
 }
 
@@ -146,6 +147,7 @@ class RecordingClient:
             attention="sdpa",
             sampling_strategy="greedy",
             temperature=0.0,
+            thinking=False,
         )
 
     def create_chat_completion(self, messages, *, max_tokens, on_text) -> ChatCompletion:
@@ -186,6 +188,7 @@ def test_banner_renders_shaded_logo_in_color_terminals(monkeypatch) -> None:
 
     assert "\033[0;97;47m" in banner
     assert "▓▓▓▓▓" in banner
+    assert "thinking   off" in banner
 
 
 def test_banner_uses_plain_logo_when_color_is_disabled(monkeypatch) -> None:
@@ -320,6 +323,25 @@ def test_chat_client_reads_health_metadata(monkeypatch) -> None:
         attention="sdpa",
         sampling_strategy="greedy",
         temperature=0.0,
+        thinking=False,
+    )
+
+
+def test_chat_client_accepts_health_without_thinking_metadata(monkeypatch) -> None:
+    payload = {key: value for key, value in HEALTH_PAYLOAD.items() if key != "thinking"}
+    monkeypatch.setattr(
+        "tinyinfer.client.urllib.request.urlopen",
+        lambda *_args, **_kwargs: HTTPResponse(body=json.dumps(payload).encode("utf-8")),
+    )
+
+    info = TinyInferClient("localhost:8000").get_server_info()
+
+    assert info.thinking is None
+    assert "thinking   unknown" in render_banner(
+        info,
+        host="http://localhost:8000",
+        max_tokens=128,
+        output=io.StringIO(),
     )
 
 

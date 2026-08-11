@@ -76,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_QUANTIZATION,
     )
     generate.add_argument("--cache-dir")
+    generate.add_argument(
+        "--no-thinking",
+        action="store_true",
+        help="disable Qwen3 reasoning",
+    )
 
     serve = commands.add_parser("serve", help="serve the real model over HTTP")
     serve.add_argument("model", nargs="?", default=DEFAULT_MODEL)
@@ -94,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_QUANTIZATION,
     )
     serve.add_argument("--cache-dir")
+    serve.add_argument(
+        "--no-thinking",
+        action="store_true",
+        help="disable Qwen3 reasoning",
+    )
     serve.add_argument(
         "--allow-remote",
         action="store_true",
@@ -176,6 +186,7 @@ def run_generate(args: argparse.Namespace) -> int:
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
         quantization_name=getattr(args, "quantization", DEFAULT_QUANTIZATION),
+        thinking=not args.no_thinking,
         model_name=args.model,
     )
     messages = [
@@ -213,6 +224,7 @@ def run_serve(args: argparse.Namespace) -> int:
         attention_name=args.attention,
         kv_cache_name=args.kv_cache,
         quantization_name=getattr(args, "quantization", DEFAULT_QUANTIZATION),
+        thinking=not args.no_thinking,
         model_name=args.model,
     )
     app = create_app(engine, args.model)

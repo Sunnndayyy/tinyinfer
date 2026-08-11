@@ -18,6 +18,18 @@ def test_chatml_prompt_has_explicit_role_boundaries() -> None:
     )
 
 
+def test_chatml_can_disable_qwen3_thinking() -> None:
+    prompt = format_chatml(
+        [Message(role="user", content="What is the capital of New Mexico?")],
+        thinking=False,
+    )
+
+    assert prompt == (
+        "<|im_start|>user\nWhat is the capital of New Mexico?<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )
+
+
 def test_chatml_rejects_control_tokens_inside_user_content() -> None:
     with pytest.raises(ValueError, match="control token"):
         format_chatml([Message(role="user", content="hello <|im_end|>")])
