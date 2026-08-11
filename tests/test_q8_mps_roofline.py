@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from benchmarks import q8_mps_linear as benchmark
+from benchmarks import q8_mps_roofline as benchmark
 
 QWEN_SHAPES = benchmark.QWEN_SHAPES
 operation_counts = benchmark.operation_counts
@@ -187,7 +187,7 @@ def test_main_routes_direct_capture_without_running_benchmark(monkeypatch, tmp_p
     monkeypatch.setattr(
         sys,
         "argv",
-        ["q8_mps_linear.py", "--metal-capture-dir", str(tmp_path)],
+        ["q8_mps_roofline.py", "--metal-capture-dir", str(tmp_path)],
     )
     monkeypatch.setattr(benchmark, "require_q8_mps", lambda: None)
     monkeypatch.setattr(benchmark, "hardware_name", lambda: "test GPU")
@@ -234,7 +234,7 @@ def test_main_routes_direct_capture_without_running_benchmark(monkeypatch, tmp_p
     ),
 )
 def test_main_rejects_invalid_profile_arguments(monkeypatch, arguments, capsys) -> None:
-    monkeypatch.setattr(sys, "argv", ["q8_mps_linear.py", *arguments])
+    monkeypatch.setattr(sys, "argv", ["q8_mps_roofline.py", *arguments])
 
     with pytest.raises(SystemExit):
         benchmark.main()

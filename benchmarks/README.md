@@ -1,83 +1,105 @@
-# Decode-to-prefill Roofline on M4 Pro
+# Q8 Metal benchmark on M4 Pro
 
-These results compare TinyInfer's fused Q8 Metal operation with PyTorch's BF16
-`F.linear` on the same Qwen2.5-1.5B MLP projection. The executable warms both
-paths together and reports the median from interleaved, individually
-synchronized samples:
+These measurements compare TinyInfer's fused Q8 Metal path with PyTorch BF16
+on the same Apple M4 Pro using PyTorch 2.13.0. Both sweeps warm the paths,
+synchronize every timed MPS sample, report medians, and alternate which path
+runs first.
+
+## Operator row sweep
+
+Run every distinct Qwen2.5-1.5B linear shape:
 
 ```bash
 .venv/bin/python benchmarks/q8_mps_linear.py \
-  --json /tmp/tinyinfer-roofline.json \
-  --plot /tmp/tinyinfer-roofline.svg
+  --warmup 10 --repetitions 20 --seed 0
 ```
 
-The command also checks the Q8 result against BF16 before it starts timing.
-Open the SVG in a browser. The circle position uses ideal algorithmic bytes.
+The tied vocabulary projection is intentionally measured only at one row.
+TinyInfer's `next_token_logits` projects the final hidden state, not every
+prompt row.
 
-Shape: `[rows, 1536] x [8960, 1536]`. PyTorch 2.13.0, 10 warmups, 100
-repetitions, seed 0.
+| Operation | Rows | Input | Output | Q8 | BF16 | BF16 / Q8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| attention k/v | 1 | 1536 | 256 | 0.162 ms | 0.148 ms | 0.918x |
+| attention k/v | 8 | 1536 | 256 | 0.190 ms | 0.171 ms | 0.903x |
+| attention k/v | 32 | 1536 | 256 | 0.298 ms | 0.250 ms | 0.840x |
+| attention k/v | 128 | 1536 | 256 | 0.778 ms | 0.320 ms | 0.411x |
+| attention k/v | 512 | 1536 | 256 | 0.992 ms | 0.314 ms | 0.317x |
+| attention q/o | 1 | 1536 | 1536 | 0.167 ms | 0.170 ms | 1.018x |
+| attention q/o | 8 | 1536 | 1536 | 0.222 ms | 0.182 ms | 0.818x |
+| attention q/o | 32 | 1536 | 1536 | 0.453 ms | 0.216 ms | 0.477x |
+| attention q/o | 128 | 1536 | 1536 | 1.106 ms | 0.307 ms | 0.278x |
+| attention q/o | 512 | 1536 | 1536 | 3.118 ms | 0.629 ms | 0.202x |
+| MLP gate/up | 1 | 1536 | 8960 | 0.182 ms | 0.202 ms | 1.113x |
+| MLP gate/up | 8 | 1536 | 8960 | 0.398 ms | 0.250 ms | 0.627x |
+| MLP gate/up | 32 | 1536 | 8960 | 1.232 ms | 0.365 ms | 0.296x |
+| MLP gate/up | 128 | 1536 | 8960 | 4.466 ms | 0.849 ms | 0.190x |
+| MLP gate/up | 512 | 1536 | 8960 | 17.262 ms | 2.655 ms | 0.154x |
+| MLP down | 1 | 8960 | 1536 | 0.187 ms | 0.235 ms | 1.254x |
+| MLP down | 8 | 8960 | 1536 | 0.399 ms | 0.254 ms | 0.637x |
+| MLP down | 32 | 8960 | 1536 | 1.188 ms | 0.425 ms | 0.358x |
+| MLP down | 128 | 8960 | 1536 | 4.224 ms | 0.945 ms | 0.224x |
+| MLP down | 512 | 8960 | 1536 | 16.840 ms | 2.768 ms | 0.164x |
+| tied vocabulary | 1 | 1536 | 151936 | 1.154 ms | 1.977 ms | 1.713x |
 
-| Rows | Path | Time | Ideal FLOP/byte | Achieved TFLOP/s | Model GB/s | Model side |
-| ---: | --- | ---: | ---: | ---: | ---: | --- |
-| 1 | BF16 | 0.256 ms | 1.00 | 0.107 | 107.5 | memory |
-| 1 | Q8 | 0.205 ms | 1.88 | 0.134 | 71.4 | memory |
-| 4 | BF16 | 0.288 ms | 3.99 | 0.383 | 95.9 | memory |
-| 4 | Q8 | 0.402 ms | 7.49 | 0.274 | 36.6 | memory |
-| 16 | BF16 | 0.327 ms | 15.81 | 1.345 | 85.1 | memory |
-| 16 | Q8 | 0.695 ms | 29.44 | 0.634 | 21.5 | compute |
-| 64 | BF16 | 0.525 ms | 61.02 | 3.352 | 54.9 | compute |
-| 64 | Q8 | 2.335 ms | 110.33 | 0.754 | 6.8 | compute |
-| 256 | BF16 | 1.492 ms | 214.18 | 4.722 | 22.0 | compute |
-| 256 | Q8 | 9.086 ms | 352.38 | 0.776 | 2.2 | compute |
+The large MLP projections win with Q8 at one row and lose by eight rows. The
+attention projections are already roughly tied or slower at one row. This is
+operator evidence for a decode-oriented crossover between one and eight rows.
+It does not identify the exact hardware limit in the kernel.
 
-One decode row performs about 27.5 million matmul FLOPs while reading a large
-weight matrix for that single row. With more prefill rows, the same weights can
-serve many activation rows, so ideal arithmetic intensity rises from 1.00 to
-214.18 FLOP/byte for BF16. The optimized BF16 operation turns that opportunity
-into 4.722 TFLOP/s at 256 rows.
+## Focused Roofline and Metal capture
 
-The byte model counts each input, weight, scale, and output exactly once. Q8
-counts one INT8 byte per weight and one FP16 scale per group of 32 weights.
-`model GB/s` divides this ideal byte count by synchronized runtime; it is not a
-Metal hardware counter and does not reveal cache traffic or repeated loads.
-
-The teaching crossover uses Apple's advertised
-[273 GB/s unified-memory bandwidth](https://support.apple.com/en-ie/121553), not
-measured sustainable bandwidth, and the best BF16 result in this sweep as a
-4.722 TFLOP/s lower-bound compute reference, not a peak ceiling. This puts the
-estimated crossover at 17.30 FLOP/byte. `Model side` is a Roofline classification
-under those assumptions, not counter evidence.
-
-TinyInfer's current Q8 shader maps rows independently and does not explicitly
-tile rows to reuse weights. Its ideal arithmetic intensity therefore describes
-the prefill opportunity, not traffic the kernel is proven to achieve. The Q8
-path wins at one row here, then falls behind BF16 as rows increase.
-
-## Focused Metal trace
-
-Capture mode is separate from benchmark timing. This command writes four
-direct Xcode GPU captures. Each capture has one test operation:
+Use the focused experiment to generate JSON, an SVG Roofline plot, and four
+direct Xcode GPU captures for the 1536 to 8960 projection:
 
 ```bash
-MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_linear.py \
+.venv/bin/python benchmarks/q8_mps_roofline.py \
+  --json /tmp/tinyinfer-roofline.json \
+  --plot /tmp/tinyinfer-roofline.svg
+
+MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_roofline.py \
   --metal-capture-dir /tmp/tinyinfer-metal-captures
 ```
 
-Open each `.gputrace` package in Xcode. Use the Counters view to inspect device
-traffic and performance limiters. The benchmark can add copied device traffic
-to its graph. See the [focused profiling evidence](q8_mps_roofline.md) for the
-counter file, commands, measurements, and proof boundaries. Capture replay time
-is not used as benchmark time.
+See [the focused Roofline evidence](q8_mps_roofline.md) for the counter input,
+measured results, and proof limits. Capture replay time is not benchmark time.
 
-The separate real-model reverse-order decode measurement for
-Qwen2.5-1.5B-Instruct reached 42.697979 tok/s with BF16 and 68.574666 tok/s with
-Q8 after the packed embedding landed, a roughly 1.606x decode speedup.
+## Exact-token real-model sweep
 
-Prefill did not improve in the separate real-model measurement. Time to first
-token was 0.04024 seconds for BF16 and 0.09874 seconds for Q8, so the Q8 TTFT was
-about 2.45x slower. Keep that regression separate from steady-state decode
-throughput: a decode win does not make the prefill path faster.
+Run matched BF16 and Q8 checkpoints with SDPA and a contiguous cache:
 
-These measurements are same-machine evidence, not cross-machine promises. The
-script prints the active PyTorch version and accepts `--warmup`, `--repetitions`,
-and `--seed` so later runs can state their measurement settings.
+```bash
+.venv/bin/python benchmarks/q8_end_to_end.py \
+  Qwen/Qwen2.5-1.5B-Instruct \
+  /path/to/qwen2.5-1.5b-q8 \
+  --lengths 1 8 32 128 512 \
+  --max-new-tokens 32 --warmup 1 --repetitions 3
+```
+
+The script constructs exact token-ID sequences, so its TTFT starts from token
+IDs and excludes tokenizer time. `First forward` isolates the synchronized
+prompt forward with a fresh cache. TTFT also includes generation setup, argmax,
+and decoding the first token. A run fails if either format stops before the
+requested output length because unequal decode spans are not comparable.
+
+| Input tokens | BF16 first forward | Q8 first forward | BF16 TTFT | Q8 TTFT | BF16 decode | Q8 decode | Q8 / BF16 decode |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 22.58 ms | 15.12 ms | 23.05 ms | 15.19 ms | 44.70 tok/s | 69.17 tok/s | 1.547x |
+| 8 | 25.20 ms | 35.74 ms | 26.33 ms | 35.90 ms | 45.25 tok/s | 69.36 tok/s | 1.533x |
+| 32 | 40.75 ms | 111.46 ms | 40.47 ms | 112.34 ms | 45.06 tok/s | 68.70 tok/s | 1.524x |
+| 128 | 94.74 ms | 419.29 ms | 84.59 ms | 418.67 ms | 43.14 tok/s | 63.48 tok/s | 1.471x |
+| 512 | 302.40 ms | 1688.00 ms | 289.87 ms | 1688.81 ms | 37.60 tok/s | 52.56 tok/s | 1.398x |
+
+The matched end-to-end crossover is also between one and eight input tokens.
+The existing `decode` leaderboard prompt is exactly 28 chat-formatted tokens,
+so the 32-token result closely reproduces its TTFT split: about 40 ms for BF16
+and 112 ms for Q8 here, versus 40 ms and 103 ms in `BENCHMARKS.md`.
+First-forward time accounts for almost all of the Q8 gap. This places the
+regression in prompt model execution, not tokenization or first-token text
+handling.
+
+Q8 remains faster for steady one-token decode at every measured prompt length,
+although the advantage narrows as the cached context grows. These results prove
+the crossover only for this model, implementation, software version, and M4 Pro.
+They do not prove whether dispatch, occupancy, memory access, or arithmetic is
+the limiting mechanism inside the Metal kernel.

@@ -6,7 +6,7 @@ decode row with 256 prefill rows. It tests PyTorch BF16 and TinyInfer Q8.
 ## Run the benchmark
 
 ```bash
-.venv/bin/python benchmarks/q8_mps_linear.py \
+.venv/bin/python benchmarks/q8_mps_roofline.py \
   --json /tmp/tinyinfer-roofline.json \
   --plot /tmp/tinyinfer-roofline.svg
 ```
@@ -23,10 +23,35 @@ The program calculates `2 * rows * input_width * output_width` FLOPs. The byte
 model counts each input, weight, scale, and output one time. These are ideal
 algorithmic bytes. They are not GPU counter bytes.
 
+The synchronized M4 Pro result was:
+
+| Rows | Path | Time | Ideal FLOP/byte | Achieved TFLOP/s | Model GB/s |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | BF16 | 0.320 ms | 1.00 | 0.086 | 86.1 |
+| 1 | Q8 | 0.275 ms | 1.88 | 0.100 | 53.3 |
+| 4 | BF16 | 0.291 ms | 3.99 | 0.378 | 94.7 |
+| 4 | Q8 | 0.339 ms | 7.49 | 0.324 | 43.3 |
+| 16 | BF16 | 0.348 ms | 15.81 | 1.265 | 80.0 |
+| 16 | Q8 | 0.736 ms | 29.44 | 0.599 | 20.3 |
+| 64 | BF16 | 0.564 ms | 61.02 | 3.121 | 51.1 |
+| 64 | Q8 | 2.366 ms | 110.33 | 0.744 | 6.7 |
+| 256 | BF16 | 1.504 ms | 214.18 | 4.687 | 21.9 |
+| 256 | Q8 | 8.950 ms | 352.38 | 0.787 | 2.2 |
+
+At one row, one activation row uses a large weight matrix one time. The GPU
+must read many weight bytes for 27.5 million FLOPs. At 256 rows, the same
+weights can serve 256 activation rows. FLOPs increase almost 256 times, but the
+ideal weight bytes do not. Thus, arithmetic intensity increases.
+
+`Model GB/s` is ideal bytes divided by synchronized runtime. It is not measured
+GPU traffic. The graph uses 273 GB/s advertised unified-memory bandwidth and
+the best BF16 result as teaching references. Neither value is a measured
+sustainable ceiling.
+
 ## Capture the four operations
 
 ```bash
-MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_linear.py \
+MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_roofline.py \
   --warmup 10 \
   --metal-capture-dir /tmp/tinyinfer-metal-captures
 ```
@@ -107,7 +132,7 @@ values. For exact graph points, replace them with Xcode's byte values.
 The command rejects the file if its matrix shape does not match the benchmark.
 
 ```bash
-.venv/bin/python benchmarks/q8_mps_linear.py \
+.venv/bin/python benchmarks/q8_mps_roofline.py \
   --counters /tmp/tinyinfer-counters.json \
   --json /tmp/tinyinfer-roofline.json \
   --plot /tmp/tinyinfer-roofline.svg
