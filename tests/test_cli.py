@@ -39,6 +39,8 @@ def test_model_commands_default_to_reference_runtime(command: str) -> None:
     assert args.decoding == "autoregressive"
     assert args.attention == "eager"
     assert args.quantization == "auto"
+    if command in {"generate", "serve"}:
+        assert args.no_thinking is False
 
 
 @pytest.mark.parametrize("quantization", ["none", "q8", "q4"])
@@ -236,6 +238,29 @@ def test_model_runners_forward_explicit_quantization(
 
     assert runner(build_parser().parse_args(arguments)) == 0
     assert load_options["quantization_name"] == quantization
+
+
+@pytest.mark.parametrize(("command", "runner"), [("generate", run_generate), ("serve", run_serve)])
+@pytest.mark.parametrize(("option", "expected"), [(None, True), ("--no-thinking", False)])
+def test_model_runners_forward_thinking(
+    command, runner, option, expected, tmp_path, monkeypatch
+) -> None:
+    engine = SimpleNamespace(stream=lambda *_args, **_kwargs: ())
+    load_options = {}
+    monkeypatch.setattr(
+        "tinyinfer.engine.Engine.from_pretrained",
+        lambda *args, **kwargs: load_options.update(kwargs) or engine,
+    )
+    monkeypatch.setattr("tinyinfer.server.create_app", lambda *_args: object())
+    monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: None)
+    arguments = [command, str(tmp_path)]
+    if option:
+        arguments.append(option)
+    if command == "generate":
+        arguments.extend(("--prompt", "hello"))
+
+    assert runner(build_parser().parse_args(arguments)) == 0
+    assert load_options["thinking"] is expected
 
 
 def test_benchmark_json_keeps_activation_and_weight_identity_separate(

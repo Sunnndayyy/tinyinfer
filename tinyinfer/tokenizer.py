@@ -21,7 +21,7 @@ class Message:
     content: str
 
 
-def format_chatml(messages: Iterable[Message]) -> str:
+def format_chatml(messages: Iterable[Message], *, thinking: bool = True) -> str:
     """Turn role-labelled messages into the exact text Qwen was trained on."""
     parts: list[str] = []
     for message in messages:
@@ -31,6 +31,8 @@ def format_chatml(messages: Iterable[Message]) -> str:
             raise ValueError("message content cannot contain a ChatML control token")
         parts.append(f"{IM_START}{message.role}\n{message.content}{IM_END}\n")
     parts.append(f"{IM_START}assistant\n")
+    if not thinking:
+        parts.append("<think>\n\n</think>\n\n")
     return "".join(parts)
 
 
@@ -47,8 +49,8 @@ class QwenTokenizer:
     def decode(self, token_ids: list[int], *, skip_special_tokens: bool = True) -> str:
         return self._tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
 
-    def encode_chat(self, messages: Iterable[Message]) -> list[int]:
-        return self.encode(format_chatml(messages))
+    def encode_chat(self, messages: Iterable[Message], *, thinking: bool = True) -> list[int]:
+        return self.encode(format_chatml(messages, thinking=thinking))
 
     def incremental_decoder(self) -> IncrementalDecoder:
         return IncrementalDecoder(self._tokenizer)

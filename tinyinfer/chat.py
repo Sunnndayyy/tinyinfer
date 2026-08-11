@@ -35,6 +35,7 @@ def render_banner(info: ServerInfo, *, host: str, max_tokens: int, output: TextI
         f"{info.architecture} · {_known(info.layers)} layers · "
         f"{_known(info.context_length)} context"
     )
+    thinking = "unknown" if info.thinking is None else "on" if info.thinking else "off"
     return "\n".join(
         [
             _render_logo(output),
@@ -48,6 +49,7 @@ def render_banner(info: ServerInfo, *, host: str, max_tokens: int, output: TextI
             f"  attention  {info.attention}",
             f"  kv cache   {info.kv_cache}",
             f"  decoding   {info.decoding}",
+            f"  thinking   {thinking}",
             (
                 f"  sampling   {info.sampling_strategy} "
                 f"(temperature {info.temperature:g}) · max output {max_tokens}"

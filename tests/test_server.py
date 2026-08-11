@@ -20,6 +20,7 @@ class RecordingEngine:
         self.attention_name = "sdpa"
         self.activation_dtype = torch.bfloat16
         self.quantization_name = "q8"
+        self.thinking = True
         self.model = SimpleNamespace(
             config=SimpleNamespace(
                 architecture=Architecture.QWEN2,
@@ -131,8 +132,18 @@ def test_health_describes_the_loaded_runtime_and_model(
         "kv_cache": "contiguous",
         "decoding": "autoregressive",
         "attention": "sdpa",
+        "thinking": True,
         "sampling": {"strategy": "greedy", "temperature": 0.0},
     }
+
+
+def test_health_reports_when_qwen3_thinking_is_disabled() -> None:
+    engine = RecordingEngine()
+    engine.model.config.architecture = Architecture.QWEN3
+    engine.thinking = False
+    client = TestClient(create_app(engine, "test-model"))
+
+    assert client.get("/health").json()["thinking"] is False
 
 
 def test_streaming_chat_completion_uses_sse_and_done_marker() -> None:
