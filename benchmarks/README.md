@@ -6,8 +6,13 @@ paths together and reports the median from interleaved, individually
 synchronized samples:
 
 ```bash
-.venv/bin/python benchmarks/q8_mps_linear.py
+.venv/bin/python benchmarks/q8_mps_linear.py \
+  --json /tmp/tinyinfer-roofline.json \
+  --plot /tmp/tinyinfer-roofline.svg
 ```
+
+The command also checks the Q8 result against BF16 before it starts timing.
+Open the SVG in a browser. The circle position uses ideal algorithmic bytes.
 
 Shape: `[rows, 1536] x [8960, 1536]`. PyTorch 2.13.0, 10 warmups, 100
 repetitions, seed 0.
@@ -50,21 +55,19 @@ path wins at one row here, then falls behind BF16 as rows increase.
 
 ## Focused Metal trace
 
-Capture mode is intentionally separate from benchmark timing. This command
-emits MPS signposts inside a Metal System Trace capture:
+Capture mode is separate from benchmark timing. This command writes four
+direct Xcode GPU captures. Each capture has one test operation:
 
 ```bash
-xcrun xctrace record --template 'Metal System Trace' \
-  --output q8-r1.trace --launch -- \
-  .venv/bin/python benchmarks/q8_mps_linear.py \
-  --rows 1 --profile-path q8 --profile-iterations 20
+MTL_CAPTURE_ENABLED=1 .venv/bin/python benchmarks/q8_mps_linear.py \
+  --metal-capture-dir /tmp/tinyinfer-metal-captures
 ```
 
-The trace shows material scheduling cost at one BF16 row, but GPU execution
-dominates at 256 rows. Q8 prefill is also GPU-execution dominated; the available
-counter set could not distinguish memory, occupancy, and ALU limiters. See the
-[focused profiling evidence](q8_mps_roofline.md) for commands, measurements,
-and proof boundaries.
+Open each `.gputrace` package in Xcode. Use the Counters view to inspect device
+traffic and performance limiters. The benchmark can add copied device traffic
+to its graph. See the [focused profiling evidence](q8_mps_roofline.md) for the
+counter file, commands, measurements, and proof boundaries. Capture replay time
+is not used as benchmark time.
 
 The separate real-model reverse-order decode measurement for
 Qwen2.5-1.5B-Instruct reached 42.697979 tok/s with BF16 and 68.574666 tok/s with
