@@ -6,6 +6,7 @@ import pytest
 import torch
 from starlette.testclient import TestClient
 
+from tinyinfer.architecture import Architecture
 from tinyinfer.engine import GenerationResult, TokenEvent
 from tinyinfer.server import MAX_REQUEST_BYTES, ReleasingStreamingResponse, create_app
 
@@ -21,6 +22,7 @@ class RecordingEngine:
         self.quantization_name = "q8"
         self.model = SimpleNamespace(
             config=SimpleNamespace(
+                architecture=Architecture.QWEN2,
                 num_hidden_layers=2,
                 max_position_embeddings=4096,
             ),
@@ -101,8 +103,17 @@ def test_non_streaming_chat_completion_uses_engine_boundary() -> None:
     assert engine.calls[0][1] == 4
 
 
-def test_health_describes_the_loaded_runtime_and_model() -> None:
-    client = TestClient(create_app(RecordingEngine(), "test-model"))
+@pytest.mark.parametrize(
+    ("architecture", "architecture_name"),
+    [(Architecture.QWEN2, "qwen2"), (Architecture.QWEN3, "qwen3")],
+)
+def test_health_describes_the_loaded_runtime_and_model(
+    architecture: Architecture,
+    architecture_name: str,
+) -> None:
+    engine = RecordingEngine()
+    engine.model.config.architecture = architecture
+    client = TestClient(create_app(engine, "test-model"))
 
     response = client.get("/health")
 
@@ -111,7 +122,7 @@ def test_health_describes_the_loaded_runtime_and_model() -> None:
         "status": "ok",
         "runtime": "0.1.0",
         "model": "test-model",
-        "architecture": "qwen2",
+        "architecture": architecture_name,
         "layers": 2,
         "context_length": 4096,
         "device": "cpu",

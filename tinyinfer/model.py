@@ -50,10 +50,18 @@ class QwenConfig:
     pad_token_id: int | None = None
     tie_word_embeddings: bool = True
     additional_eos_token_ids: tuple[int, ...] = ()
+    architecture: Architecture = Architecture.QWEN2
+    attention_head_dim: int | None = None
+    qkv_bias: bool = True
+    qk_norm_eps: float | None = None
 
     @property
     def head_dim(self) -> int:
-        return self.hidden_size // self.num_attention_heads
+        return (
+            self.attention_head_dim
+            if self.attention_head_dim is not None
+            else self.hidden_size // self.num_attention_heads
+        )
 
     @property
     def num_key_value_groups(self) -> int:
@@ -69,8 +77,12 @@ class QwenConfig:
             query_heads=self.num_attention_heads,
             key_value_heads=self.num_key_value_heads,
             head_dim=self.head_dim,
-            qkv_bias=True,
-            qk_norm=None,
+            qkv_bias=self.qkv_bias,
+            qk_norm=(
+                NormSpec(NormMode.DIRECT, self.qk_norm_eps)
+                if self.qk_norm_eps is not None
+                else None
+            ),
             output_gate=False,
         )
         layer = LayerSpec(
@@ -80,7 +92,7 @@ class QwenConfig:
             channel_mixer=DenseSwiGLUSpec(self.intermediate_size),
         )
         return ModelSpec(
-            architecture=Architecture.QWEN2,
+            architecture=self.architecture,
             vocab_size=self.vocab_size,
             hidden_size=self.hidden_size,
             max_position_embeddings=self.max_position_embeddings,
@@ -106,7 +118,7 @@ class QwenConfig:
             layer.input_norm != spec.final_norm or layer.post_attention_norm != spec.final_norm
             for layer in spec.layers
         ):
-            raise ValueError("descriptor normalization must be uniform for Qwen2 construction")
+            raise ValueError("descriptor normalization must be uniform for dense Qwen construction")
         if not isinstance(spec.position, ScalarRoPESpec) or spec.position.rotary_fraction != 1.0:
             raise NotImplementedError(
                 "model construction does not yet support partial or multiaxis RoPE"
@@ -116,13 +128,12 @@ class QwenConfig:
         for layer in spec.layers:
             if not isinstance(layer.token_mixer, SoftmaxAttentionSpec):
                 raise NotImplementedError("model construction does not yet support Gated DeltaNet")
-            if layer.token_mixer.qk_norm is not None:
+            if (
+                layer.token_mixer.qk_norm is not None
+                and layer.token_mixer.qk_norm.mode is not NormMode.DIRECT
+            ):
                 raise NotImplementedError(
-                    "model construction does not yet support attention Q/K normalization"
-                )
-            if not layer.token_mixer.qkv_bias:
-                raise NotImplementedError(
-                    "model construction does not yet support bias-free Q/K/V projections"
+                    "model construction does not yet support unit-offset attention Q/K RMSNorm"
                 )
             if layer.token_mixer.output_gate:
                 raise NotImplementedError(
@@ -145,10 +156,8 @@ class QwenConfig:
             raise NotImplementedError(
                 "model construction does not yet support heterogeneous dense layers"
             )
-        if spec.hidden_size != attention.query_heads * attention.head_dim:
-            raise ValueError("descriptor hidden size does not match its attention dimensions")
         if spec.bos_token_id is None:
-            raise ValueError("descriptor must provide bos_token_id for Qwen2 construction")
+            raise ValueError("descriptor must provide bos_token_id for dense Qwen construction")
         return cls(
             vocab_size=spec.vocab_size,
             hidden_size=spec.hidden_size,
@@ -164,6 +173,10 @@ class QwenConfig:
             pad_token_id=spec.pad_token_id,
             tie_word_embeddings=spec.output.tie_embeddings,
             additional_eos_token_ids=spec.additional_eos_token_ids,
+            architecture=spec.architecture,
+            attention_head_dim=attention.head_dim,
+            qkv_bias=attention.qkv_bias,
+            qk_norm_eps=attention.qk_norm.eps if attention.qk_norm else None,
         )
 
     @classmethod
@@ -249,16 +262,28 @@ class Attention(nn.Module):
         self.config = config
         self.calculate_attention = implementation
         self.q_proj = nn.Linear(
-            config.hidden_size, config.num_attention_heads * config.head_dim, bias=True
+            config.hidden_size,
+            config.num_attention_heads * config.head_dim,
+            bias=config.qkv_bias,
         )
         self.k_proj = nn.Linear(
-            config.hidden_size, config.num_key_value_heads * config.head_dim, bias=True
+            config.hidden_size,
+            config.num_key_value_heads * config.head_dim,
+            bias=config.qkv_bias,
         )
         self.v_proj = nn.Linear(
-            config.hidden_size, config.num_key_value_heads * config.head_dim, bias=True
+            config.hidden_size,
+            config.num_key_value_heads * config.head_dim,
+            bias=config.qkv_bias,
         )
         self.o_proj = nn.Linear(
             config.num_attention_heads * config.head_dim, config.hidden_size, bias=False
+        )
+        self.q_norm = (
+            RMSNorm(config.head_dim, config.qk_norm_eps) if config.qk_norm_eps is not None else None
+        )
+        self.k_norm = (
+            RMSNorm(config.head_dim, config.qk_norm_eps) if config.qk_norm_eps is not None else None
         )
 
     def forward(
@@ -273,16 +298,18 @@ class Attention(nn.Module):
         position: int,
     ) -> Tensor:
         batch, sequence_length, _ = hidden_states.shape
-        query = (
-            self.q_proj(hidden_states)
-            .view(batch, sequence_length, self.config.num_attention_heads, self.config.head_dim)
-            .transpose(1, 2)
+        query = self.q_proj(hidden_states).view(
+            batch, sequence_length, self.config.num_attention_heads, self.config.head_dim
         )
-        key = (
-            self.k_proj(hidden_states)
-            .view(batch, sequence_length, self.config.num_key_value_heads, self.config.head_dim)
-            .transpose(1, 2)
+        key = self.k_proj(hidden_states).view(
+            batch, sequence_length, self.config.num_key_value_heads, self.config.head_dim
         )
+        if self.q_norm is not None:
+            query = self.q_norm(query)
+        if self.k_norm is not None:
+            key = self.k_norm(key)
+        query = query.transpose(1, 2)
+        key = key.transpose(1, 2)
         value = (
             self.v_proj(hidden_states)
             .view(batch, sequence_length, self.config.num_key_value_heads, self.config.head_dim)
@@ -527,7 +554,7 @@ class QwenForCausalLM(nn.Module):
         missing = expected - loaded
         if missing or unexpected:
             raise ValueError(
-                f"checkpoint does not match TinyInfer's Qwen2 implementation: "
+                f"checkpoint does not match TinyInfer's dense Qwen implementation: "
                 f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
             )
 

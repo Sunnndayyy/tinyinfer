@@ -122,7 +122,7 @@ def engine_metadata(engine: Engine, model_name: str) -> dict[str, object]:
         "status": "ok",
         "runtime": __version__,
         "model": model_name,
-        "architecture": "qwen2",
+        "architecture": config.architecture.value,
         "layers": config.num_hidden_layers,
         "context_length": config.max_position_embeddings,
         "device": str(engine.device),
